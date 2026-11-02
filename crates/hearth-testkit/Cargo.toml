@@ -14,6 +14,10 @@ path = "src/bin/hearth-mock-llm.rs"
 name = "fake-llama-server"
 path = "src/bin/fake-llama-server.rs"
 
+[[bin]]
+name = "fake-mcp-server"
+path = "src/bin/fake-mcp-server.rs"
+
 [dependencies]
 axum = { workspace = true }
 tokio = { workspace = true }

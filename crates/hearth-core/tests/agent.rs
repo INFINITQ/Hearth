@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use hearth_core::agent::{Agent, Decision, PermissionReply};
 use hearth_core::chat::StoreResolver;
+use hearth_core::mcp::{Mcp, ServerConfig, Transport};
 use hearth_core::runs::{CollectSink, RunEnd, RunEvent, RunManager};
 use hearth_core::settings::SettingsStore;
 use hearth_core::store::{ConnectionInput, MessageRole, Store};
@@ -22,6 +23,8 @@ struct Harness {
     store: Arc<Store>,
     runs: Arc<RunManager>,
     agent: Agent,
+    /// MCP servers the agent can use (none until a test adds one).
+    mcp: Mcp,
     session_id: String,
 }
 
@@ -90,11 +93,13 @@ async fn harness(script: Script, mode: Option<&str>) -> Harness {
     store.trust_project(&saved.id).unwrap();
     let session = store.create_code_session(&saved.id, mode).unwrap();
     let runs = Arc::new(RunManager::new());
-    let agent = Agent::new(
+    let mcp = Mcp::new(store.clone());
+    let agent = Agent::with_mcp(
         store.clone(),
         runs.clone(),
         Arc::new(StoreResolver::new(store.clone())),
         settings,
+        mcp.clone(),
     );
     Harness {
         _settings: settings_dir,
@@ -103,6 +108,7 @@ async fn harness(script: Script, mode: Option<&str>) -> Harness {
         store,
         runs,
         agent,
+        mcp,
         session_id: session.id,
     }
 }
@@ -906,4 +912,108 @@ async fn web_tools_ask_first_then_search_and_read() {
         read.content
     );
     assert_eq!(path.last().unwrap().content, "Use a yield fixture.");
+}
+
+/// `target/debug/fake-mcp-server.exe` (built by `cargo build -p hearth-testkit --bins`).
+fn fake_mcp_server() -> String {
+    let exe = std::env::current_exe().unwrap();
+    let path = exe
+        .parent()
+        .and_then(|deps| deps.parent())
+        .unwrap()
+        .join("fake-mcp-server.exe");
+    assert!(path.is_file(), "run cargo build -p hearth-testkit --bins");
+    path.display().to_string()
+}
+
+#[tokio::test]
+async fn mcp_tools_ask_first_and_always_allow_is_remembered() {
+    let h = harness(Script::new(), None).await;
+    h.mcp
+        .save(ServerConfig {
+            id: String::new(),
+            name: "Notes".into(),
+            enabled: true,
+            transport: Transport::Stdio {
+                command: fake_mcp_server(),
+                args: Vec::new(),
+                env: Default::default(),
+                cwd: None,
+            },
+        })
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while h.mcp.tools().is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{:#?}",
+            h.mcp.servers()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    h.server.set_script(
+        Script::new()
+            .expect_then(
+                vec![Expect::HasTool("mcp__notes__echo".into())],
+                Reply::tool_call("mcp__notes__echo", json!({ "text": "one" })),
+            )
+            .expect_then(
+                vec![Expect::LastToolResultContains("echo: one".into())],
+                Reply::tool_call("mcp__notes__echo", json!({ "text": "two" })),
+            )
+            .expect_then(
+                vec![Expect::LastToolResultContains("echo: two".into())],
+                Reply::text("Both echoed."),
+            ),
+    );
+
+    let (sink, _) = h.start("Echo twice.");
+    let RunEvent::PermissionRequest {
+        request_id,
+        title,
+        choices,
+        ..
+    } = wait_for(&sink, "permission request", |e| {
+        matches!(e, RunEvent::PermissionRequest { .. })
+    })
+    .await
+    else {
+        unreachable!()
+    };
+    assert_eq!(title, "Notes: echo");
+    assert!(
+        choices.iter().any(|c| c.id == "allow_always"),
+        "{choices:?}"
+    );
+    h.agent.resolve_permission(
+        &request_id,
+        PermissionReply {
+            decision: Decision::AllowAlways,
+            note: None,
+        },
+    );
+    assert_eq!(
+        finished(&sink).await,
+        RunEnd::Completed,
+        "{:#?}",
+        sink.events()
+    );
+    let prompts = sink
+        .events()
+        .iter()
+        .filter(|e| matches!(e, RunEvent::PermissionRequest { .. }))
+        .count();
+    assert_eq!(prompts, 1, "the second call was allowed by the saved rule");
+    let project = h
+        .store
+        .session(&h.session_id)
+        .unwrap()
+        .workspace_id
+        .unwrap();
+    assert_eq!(
+        h.store.rules(&project, "mcp").unwrap(),
+        ["mcp__notes__echo"]
+    );
+    let path = h.store.active_path(&h.session_id).unwrap();
+    assert_eq!(path.last().unwrap().content, "Both echoed.");
 }

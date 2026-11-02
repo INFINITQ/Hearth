@@ -295,6 +295,7 @@ impl MockServer {
             .route("/health", get(health))
             .route("/tokenize", post(tokenize))
             .route("/search", get(search))
+            .route("/mcp", post(mcp))
             .route("/pages/{name}", get(page))
             .route("/__mock/script", post(set_script))
             .route("/__mock/release/{hold}", post(release))
@@ -784,6 +785,14 @@ async fn models(State(shared): State<Arc<Shared>>) -> Json<Value> {
     Json(
         json!({ "object": "list", "data": [{ "id": model, "object": "model", "owned_by": "hearth-mock" }] }),
     )
+}
+
+/// A Streamable HTTP MCP server with the test tools (JSON answers, a session id).
+async fn mcp(Json(message): Json<Value>) -> Response {
+    match crate::mcp::answer(&message) {
+        Some(answer) => ([("mcp-session-id", "fake-session")], Json(answer)).into_response(),
+        None => StatusCode::ACCEPTED.into_response(),
+    }
 }
 
 /// A SearXNG-style search: the scripted results, whatever the query.

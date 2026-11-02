@@ -10,6 +10,8 @@ import {
   type ConnectionInput,
   DEFAULT_SETTINGS,
   type FileChange,
+  type McpServer,
+  type McpServerConfig,
   type Mode,
   type ModelStatus,
   type RuntimeOverview,
@@ -124,6 +126,16 @@ export interface ChatBackend {
   webKeySet(provider: 'brave' | 'tavily', key: string): Promise<WebKeys>;
   /** A search with the current settings, to check them. */
   webTest(): Promise<WebHit[]>;
+
+  /** Settings → MCP. Every change answers with the whole list. */
+  mcpServers(): Promise<McpServer[]>;
+  mcpSave(config: McpServerConfig): Promise<McpServer[]>;
+  mcpRemove(id: string): Promise<McpServer[]>;
+  mcpSetEnabled(id: string, enabled: boolean): Promise<McpServer[]>;
+  /** Adds the servers in a Claude Desktop style config. */
+  mcpImport(json: string): Promise<McpServer[]>;
+  mcpRestart(id: string): Promise<McpServer[]>;
+  onMcp(listener: (servers: McpServer[]) => void): () => void;
 
   /** The Models page: llama-server, folders, models and their state (`refresh`: probe and rescan). */
   runtimeOverview(refresh: boolean): Promise<RuntimeOverview>;
@@ -251,6 +263,13 @@ export function tauriBackend(): Backend {
     webKeys: () => invoke('web_keys'),
     webKeySet: (provider, key) => invoke('web_key_set', { provider, key }),
     webTest: () => invoke('web_test'),
+    mcpServers: () => invoke('mcp_servers'),
+    mcpSave: (config) => invoke('mcp_save', { config }),
+    mcpRemove: (id) => invoke('mcp_remove', { id }),
+    mcpSetEnabled: (id, enabled) => invoke('mcp_set_enabled', { id, enabled }),
+    mcpImport: (json) => invoke('mcp_import', { json }),
+    mcpRestart: (id) => invoke('mcp_restart', { id }),
+    onMcp: (listener) => subscribe<McpServer[]>('hearth://mcp', listener),
     runtimeOverview: (refresh) => invoke('runtime_overview', { refresh }),
     modelLoad: (modelId) => invoke('model_load', { modelId }),
     modelUnload: (modelId) => invoke('model_unload', { modelId }),

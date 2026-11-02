@@ -1,6 +1,7 @@
 import { Monitor, Moon, SquareTerminal, Sun, Terminal } from 'lucide-react';
 import { type ReactNode, useEffect, useState } from 'react';
 import { ConnectionsSettings } from '../components/ConnectionsSettings';
+import { McpSettings } from '../components/McpSettings';
 import { Button } from '../components/ui/Button';
 import { Segmented } from '../components/ui/Segmented';
 import { type WebKeys, backend, errorMessage } from '../lib/backend';
@@ -65,6 +66,10 @@ export function SettingsScreen() {
 
         <Section title="Web">
           <WebSettings />
+        </Section>
+
+        <Section title="MCP servers">
+          <McpSettings />
         </Section>
 
         <Section title="About">

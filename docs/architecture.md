@@ -133,6 +133,25 @@ Chats with web search on and the agent's `web_search` and `web_fetch` tools shar
   Auto-edit mode, and run freely in Full auto.
 - Results and pages are information, not instructions, and both prompts say so.
 
+## MCP servers (`hearth-core/src/mcp/`)
+
+MCP servers give the coding agent more tools. Hearth has its own small client
+(`client.rs`) for the part it uses: `initialize`, `tools/list` (with pages) and `tools/call`,
+over a server's stdin/stdout or Streamable HTTP (JSON or SSE answers, the session header).
+
+- **Settings** live in the database's `kv` table: a name, on or off, and either a command (with
+  arguments, environment and folder) or a URL (with headers). Claude Desktop, Cursor and VS Code
+  configs (`"mcpServers"`) can be pasted in to import them.
+- **Running:** servers start when Hearth starts and again when their settings change. A
+  command is looked up the way a shell would (`npx` is `npx.cmd`) and runs in its own Job
+  Object. Its stderr is kept (the last 50 lines), so a server that can't start says why. A
+  server that dies is marked as failed. The Settings page follows every change.
+- **Tools:** a ready server's tools join each new coding task as `mcp__<server>__<tool>`
+  (at most 64 characters), after the built-in tools. They're in the External class: Plan mode
+  refuses them, Full auto runs them, and otherwise the agent asks, offering "Always allow this
+  tool here" (saved per project, like command rules). Results are read as text (images and
+  other content are described), cut at 40,000 characters.
+
 ## Context management (`hearth-core/src/context.rs`)
 
 Chats and coding tasks keep their requests inside the model's context window.

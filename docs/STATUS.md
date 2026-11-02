@@ -143,9 +143,28 @@ commands with their live output. A Vite plugin fixes xterm.js under `freezeProto
     - Vitest: 25.
     - Playwright E2E: 34 (Settings → Web, then a reply that searches, reads and cites).
 
-## Next: M9, MCP servers
+- **M9**: MCP servers.
+  - **Backend** (`hearth-core/src/mcp/`): a small own client instead of rmcp (it ships a new
+    major API every few weeks; Hearth needs only `initialize`, `tools/list` and `tools/call`):
+    stdio (JSON lines, `ping` answered, other server requests refused) and Streamable HTTP
+    (JSON or SSE answers, `Mcp-Session-Id`, `MCP-Protocol-Version`). Commands found like a
+    shell would (`npx.cmd`), run in a Job Object, stderr kept for errors. Settings in the `kv`
+    table; Claude Desktop style import; servers restart when changed; a crash marks the server
+    failed.
+  - **Agent:** `mcp__<server>__<tool>` tools after the built-in ones; External class with
+    "Always allow this tool here" saved per project (`permission_rules`, class `mcp`).
+  - **Testkit:** `fake-mcp-server.exe` (tools `echo`, `add`, `fail`; failure and crash
+    switches) and `POST /mcp` on the mock server.
+  - **UI:** Settings → MCP servers: add or edit (command or URL), import JSON, on/off, restart,
+    remove, state with tools or the error and what the server printed.
+  - **Tests (all green):**
+    - Rust: 134 core unit, 19 agent, 11 chat, 11 client, 5 MCP, 1 runtime, 4 app.
+    - Vitest: 25.
+    - Playwright E2E: 35 (a server added in Settings, then a task that uses its tool).
 
-- An MCP client (rmcp): stdio and streamable HTTP servers, each process in its own Job Object.
-- Settings → MCP: add a server, import Claude-Desktop-style JSON, status and tool list.
-- The agent gets the servers' tools as `mcp__<server>__<tool>` in the External class (asks
-  first, with "always allow" per tool).
+## Next: M10, attachments and images
+
+- Attach text and code files and PDFs (their text, extracted in the UI with pdf.js) to chat
+  messages and coding tasks; drag and drop, paste.
+- Images for vision models (a local model's mmproj, or a connection that accepts images):
+  resized, sent as data URIs, shown as thumbnails in the transcript.

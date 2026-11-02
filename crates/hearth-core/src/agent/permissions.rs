@@ -154,12 +154,19 @@ pub fn decide(
                 _ => Verdict::Ask,
             }
         }
-        Class::External => match mode {
-            Plan => Verdict::Deny(PLAN_DENIAL.into()),
-            FullAuto => Verdict::Allow,
-            _ if granted => Verdict::Allow,
-            _ => Verdict::Ask,
-        },
+        Class::External => {
+            // "Always allow" for an MCP tool is saved as its name.
+            let ruled = match &prepared.action {
+                super::tools::Action::Mcp { name, .. } => rules.iter().any(|rule| rule == name),
+                _ => false,
+            };
+            match mode {
+                Plan => Verdict::Deny(PLAN_DENIAL.into()),
+                FullAuto => Verdict::Allow,
+                _ if granted || ruled => Verdict::Allow,
+                _ => Verdict::Ask,
+            }
+        }
         Class::Network => match mode {
             FullAuto => Verdict::Allow,
             _ if granted => Verdict::Allow,
@@ -186,6 +193,10 @@ pub fn choices(prepared: &Prepared) -> Vec<Choice> {
             })
         }
         (Class::Execute, _, _) => None,
+        (Class::External, _, _) => Some(Choice {
+            id: "allow_always",
+            label: "Always allow this tool here".into(),
+        }),
         (Class::Edit, true, _) => Some(Choice {
             id: "allow_session",
             label: "Allow edits this session".into(),

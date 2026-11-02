@@ -1,7 +1,7 @@
 import { type Page, expect, test } from '@playwright/test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { type RunningApp, launchApp, trackViolations } from './app';
 import { type MockLlm, startMock } from './mock';
 
@@ -431,4 +431,55 @@ test.describe('commands, changes, undo and steering', () => {
       await page.screenshot({ path: join(dir, `m4-code-${theme}.png`) });
     }
   });
+});
+
+test('an MCP server added in Settings gives the agent its tools, after asking', async () => {
+  const fake = resolve('target/debug/fake-mcp-server.exe');
+  await mock.setScript({
+    steps: [
+      {
+        expect: [{ has_tool: 'mcp__notes__echo' }],
+        reply: {
+          tool_calls: [{ name: 'mcp__notes__echo', arguments: { text: 'from the agent' } }],
+        },
+      },
+      {
+        expect: [{ last_tool_result_contains: 'echo: from the agent' }],
+        reply: { content: 'The notes server echoed it.' },
+      },
+    ],
+  });
+  const { page } = app;
+  const dir = join('test-results', 'screens');
+  mkdirSync(dir, { recursive: true });
+
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const section = page
+    .locator('section')
+    .filter({ has: page.getByRole('heading', { name: 'MCP servers' }) });
+  await section.getByRole('button', { name: 'Add', exact: true }).click();
+  await section.getByLabel('Server name').fill('Notes');
+  await section.getByRole('textbox', { name: 'Command' }).fill(fake);
+  await section.getByRole('button', { name: 'Save' }).click();
+  const row = section.locator('[data-mcp="Notes"]');
+  await expect(row).toHaveAttribute('data-state', 'ready');
+  await expect(row).toContainText('Ready · 3 tools');
+  await row.locator('button[aria-expanded]').click();
+  await expect(row.getByRole('list', { name: 'Notes tools' })).toContainText('echo');
+  await row.scrollIntoViewIfNeeded();
+  for (const theme of ['light', 'dark'] as const) {
+    await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme);
+    await page.waitForTimeout(150);
+    await page.screenshot({ path: join(dir, `m9-mcp-settings-${theme}.png`) });
+  }
+
+  // A task uses the tool; it asks first, and Always allow is offered.
+  await openProject(page);
+  await send(page, 'Echo something with the notes server.');
+  const prompt = page.getByRole('region', { name: 'Permission request' });
+  await expect(prompt).toContainText('Allow this tool?');
+  await expect(prompt).toContainText('Notes: echo');
+  await prompt.getByRole('button', { name: 'Always allow this tool here' }).click();
+  await expect(page.getByText('The notes server echoed it.')).toBeVisible();
+  await expect(tool(page, 'mcp__notes__echo')).toHaveAttribute('data-status', 'ok');
 });

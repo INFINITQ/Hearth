@@ -4,6 +4,7 @@
 import type { ChatBackend } from './backend';
 import type {
   LocalModel,
+  McpServer,
   Message,
   ModelStatus,
   PermissionChoice,
@@ -125,6 +126,8 @@ export function fakeChat(): ChatBackend {
     }
   >();
   const webKeys = { brave: false, tavily: false };
+  const mcp = new Map<string, McpServer>();
+  const mcpListeners = new Set<(servers: McpServer[]) => void>();
   let counter = 0;
   const newId = () => `fake-${Date.now().toString(36)}-${(counter++).toString(36)}`;
   const changed = () => sessionListeners.forEach((listener) => listener());
@@ -521,6 +524,49 @@ export function fakeChat(): ChatBackend {
         snippet: 'A list of open models you can run yourself.',
       },
     ],
+
+    // Pretend MCP servers: a saved server is ready with two tools a moment later.
+    mcpServers: async () => [...mcp.values()],
+    mcpSave: async (config) => {
+      const id = config.id || newId();
+      mcp.set(id, { ...config, id, status: { state: 'starting' }, log: [] });
+      setTimeout(() => {
+        const server = mcp.get(id);
+        if (!server) return;
+        const slug = server.name.toLowerCase().replace(/[^a-z0-9_-]+/g, '_');
+        const tools = ['read_note', 'write_note'].map((tool) => ({
+          name: `mcp__${slug}__${tool}`,
+          tool,
+          description: tool === 'read_note' ? 'Reads a note.' : 'Writes a note.',
+        }));
+        mcp.set(id, {
+          ...server,
+          status: server.enabled
+            ? { state: 'ready', server: server.name, tools }
+            : { state: 'off' },
+        });
+        mcpListeners.forEach((l) => l([...mcp.values()]));
+      }, 600);
+      return [...mcp.values()];
+    },
+    mcpRemove: async (id) => {
+      mcp.delete(id);
+      return [...mcp.values()];
+    },
+    mcpSetEnabled: async (id, enabled) => {
+      const server = mcp.get(id);
+      if (server)
+        mcp.set(id, { ...server, enabled, status: { state: enabled ? 'starting' : 'off' } });
+      return [...mcp.values()];
+    },
+    mcpImport: async () => {
+      throw new Error('Importing works in the app, not in the browser preview.');
+    },
+    mcpRestart: async () => [...mcp.values()],
+    onMcp: (listener) => {
+      mcpListeners.add(listener);
+      return () => mcpListeners.delete(listener);
+    },
 
     runtimeOverview: async () => ({
       server: {

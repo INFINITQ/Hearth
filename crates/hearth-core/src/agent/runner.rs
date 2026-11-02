@@ -114,6 +114,7 @@ struct Inner {
     steers: Mutex<HashMap<String, Vec<String>>>,
     shells: Mutex<HashMap<ShellKind, Option<Shell>>>,
     web: crate::web::Web,
+    mcp: crate::mcp::Mcp,
 }
 
 #[derive(Clone)]
@@ -377,14 +378,27 @@ fn first_chars(text: &str, max: usize) -> String {
 }
 
 impl Agent {
+    /// An agent without MCP servers.
     pub fn new(
         store: Arc<Store>,
         runs: Arc<RunManager>,
         resolver: Arc<dyn ModelResolver>,
         settings: Arc<SettingsStore>,
     ) -> Self {
+        Self::with_mcp(store, runs, resolver, settings, crate::mcp::Mcp::disabled())
+    }
+
+    /// An agent that also gets the ready MCP servers' tools.
+    pub fn with_mcp(
+        store: Arc<Store>,
+        runs: Arc<RunManager>,
+        resolver: Arc<dyn ModelResolver>,
+        settings: Arc<SettingsStore>,
+        mcp: crate::mcp::Mcp,
+    ) -> Self {
         Self(Arc::new(Inner {
             web: crate::web::Web::new(store.clone(), settings.clone()),
+            mcp,
             store,
             runs,
             resolver,
@@ -679,7 +693,9 @@ impl Agent {
         chat::auto_title(store, run, &job.session.id);
         let system =
             prompt::system_prompt(&self.snapshot(job.session, &job.workspace, job.trusted));
-        let defs = tools::tool_defs(&tools::specs());
+        // MCP servers' tools come after the built-in ones, in a fixed order.
+        let mut defs = tools::tool_defs(&tools::specs());
+        defs.extend(self.0.mcp.tool_defs());
         let params = ChatParams::of(job.session);
         let memory = self.memory(&job.session.id);
         let undone = memory.undone.swap(false, Ordering::SeqCst);
@@ -969,7 +985,22 @@ impl Agent {
             }
         };
 
-        let prepared = {
+        let mcp = self.0.mcp.find(&name);
+        let prepared = if let Some((server, tool)) = mcp {
+            Ok(Prepared {
+                tool: "mcp",
+                class: tools::Class::External,
+                title: format!("{server}: {}", tool.tool),
+                path: None,
+                inside: true,
+                diff: None,
+                command: None,
+                action: Action::Mcp {
+                    name: tool.name,
+                    args: args.clone(),
+                },
+            })
+        } else {
             let (workspace, memory, args, name) = (
                 job.workspace.clone(),
                 memory.clone(),
@@ -1101,6 +1132,29 @@ impl Agent {
             action @ (Action::WebSearch { .. } | Action::WebFetch { .. }) => {
                 tools::run_web(&self.0.web, &action, &run.cancel, &mut display).await
             }
+            Action::Mcp { name, args } => match self.0.mcp.call(&name, args, &run.cancel).await {
+                Ok(called) => {
+                    let first = called.text.lines().next().unwrap_or_default();
+                    let mut summary: String = first.chars().take(60).collect();
+                    if summary.len() < first.len() {
+                        summary.push('…');
+                    }
+                    tools::Outcome {
+                        ok: !called.is_error,
+                        summary: if called.is_error {
+                            "The tool reported an error".into()
+                        } else {
+                            summary
+                        },
+                        text: called.text,
+                    }
+                }
+                Err(err) => tools::Outcome {
+                    ok: false,
+                    text: err,
+                    summary: "Failed".into(),
+                },
+            },
             Action::Kill { process_id } => match memory.processes.get(process_id) {
                 Some(process) => {
                     process.kill();
@@ -1165,10 +1219,16 @@ impl Agent {
         display: &mut Value,
     ) -> Option<Answered> {
         let run = job.run;
+        // Commands' rules are prefixes; MCP tools' are their names.
+        let kind = if prepared.class == tools::Class::External {
+            "mcp"
+        } else {
+            "execute"
+        };
         let rules = self
             .0
             .store
-            .rules(&job.project_id, "execute")
+            .rules(&job.project_id, kind)
             .unwrap_or_default();
         let verdict = permissions::decide(
             self.mode(&job.session.id),
@@ -1252,6 +1312,10 @@ impl Agent {
                                     .store
                                     .add_rule(&job.project_id, "execute", &check.prefix)
                             {
+                                tracing::warn!("could not save the rule: {err}");
+                            }
+                        } else if let Action::Mcp { name, .. } = &prepared.action {
+                            if let Err(err) = self.0.store.add_rule(&job.project_id, "mcp", name) {
                                 tracing::warn!("could not save the rule: {err}");
                             }
                         } else {

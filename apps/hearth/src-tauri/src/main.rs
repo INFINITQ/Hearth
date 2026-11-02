@@ -13,6 +13,7 @@ mod commands;
 mod error;
 mod guard;
 mod links;
+mod mcp_commands;
 mod runtime_commands;
 mod terminal_commands;
 mod theme;
@@ -25,6 +26,7 @@ use std::sync::Arc;
 
 use hearth_core::agent::Agent;
 use hearth_core::chat::{Chat, StoreResolver};
+use hearth_core::mcp::Mcp;
 use hearth_core::runs::RunManager;
 use hearth_core::runtime::Runtime;
 use hearth_core::settings::SettingsStore;
@@ -108,6 +110,12 @@ fn main() {
             web_commands::web_keys,
             web_commands::web_key_set,
             web_commands::web_test,
+            mcp_commands::mcp_servers,
+            mcp_commands::mcp_save,
+            mcp_commands::mcp_remove,
+            mcp_commands::mcp_set_enabled,
+            mcp_commands::mcp_import,
+            mcp_commands::mcp_restart,
         ])
         .setup(|app| {
             let data = data_dir(app.handle())?;
@@ -140,7 +148,22 @@ fn main() {
                 resolver.clone(),
                 settings.clone(),
             );
-            let agent = Agent::new(store.clone(), runs.clone(), resolver, settings.clone());
+            // MCP servers start in the background; their tools join tasks once ready.
+            let mcp = Mcp::new(store.clone());
+            let handle = app.handle().clone();
+            let watched = mcp.clone();
+            mcp.on_change(move || {
+                let _ = handle.emit_to(window::MAIN, mcp_commands::MCP_EVENT, watched.servers());
+            });
+            let starting = mcp.clone();
+            tauri::async_runtime::spawn(async move { starting.start_all() });
+            let agent = Agent::with_mcp(
+                store.clone(),
+                runs.clone(),
+                resolver,
+                settings.clone(),
+                mcp.clone(),
+            );
             let web = Arc::new(Web::new(store.clone(), settings.clone()));
 
             app.manage(settings);
@@ -150,6 +173,7 @@ fn main() {
             app.manage(agent);
             app.manage(Arc::new(Terminals::new()));
             app.manage(web);
+            app.manage(mcp);
             app.manage(DataDir(data.clone()));
             window::create_main(app.handle(), &data)?;
             Ok(())

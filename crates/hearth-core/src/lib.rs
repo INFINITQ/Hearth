@@ -9,6 +9,7 @@ pub mod chat;
 pub mod context;
 pub mod fsutil;
 pub mod llm;
+pub mod mcp;
 pub mod proc;
 pub mod runs;
 pub mod runtime;

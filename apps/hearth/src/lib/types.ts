@@ -209,6 +209,29 @@ export type ToolDisplay = {
   pageTitle?: string;
 };
 
+/** An MCP server's settings (kept in Hearth's database). */
+export type McpServerConfig = { id: string; name: string; enabled: boolean } & (
+  | {
+      type: 'stdio';
+      command: string;
+      args: string[];
+      env: Record<string, string>;
+      cwd?: string | null;
+    }
+  | { type: 'http'; url: string; headers: Record<string, string> }
+);
+
+export type McpTool = { name: string; tool: string; description: string };
+
+export type McpStatus =
+  | { state: 'off' }
+  | { state: 'starting' }
+  | { state: 'ready'; server: string; tools: McpTool[] }
+  | { state: 'failed'; error: string };
+
+/** An MCP server with its state and the last lines it wrote to stderr. */
+export type McpServer = McpServerConfig & { status: McpStatus; log: string[] };
+
 /** A web search result. */
 export type WebHit = { title: string; url: string; snippet: string };
 

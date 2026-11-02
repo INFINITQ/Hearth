@@ -29,8 +29,8 @@ In development. Milestones:
 | M6  | Context management (compaction)                             | done  |
 | M7  | Terminal panel                                              | done  |
 | M8  | Web search and fetch                                        | done  |
-| M9  | MCP servers                                                 | next  |
-| M10 | Attachments and images                                      |       |
+| M9  | MCP servers                                                 | done  |
+| M10 | Attachments and images                                      | next  |
 | M11 | Polish, installer, docs                                     |       |
 
 ## Development

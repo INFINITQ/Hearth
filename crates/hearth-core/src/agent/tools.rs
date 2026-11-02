@@ -476,6 +476,11 @@ pub enum Action {
         url: String,
         max_chars: usize,
     },
+    /// A tool of an MCP server, by the agent's name for it (`mcp__<server>__<tool>`).
+    Mcp {
+        name: String,
+        args: Value,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1269,8 +1274,8 @@ pub fn execute(prepared: Prepared, cx: &ToolCx) -> Outcome {
         Action::Run { .. } | Action::Output { .. } | Action::Kill { .. } => {
             failed("Commands are run by the agent loop.".into())
         }
-        Action::WebSearch { .. } | Action::WebFetch { .. } => {
-            failed("Web tools are run by the agent loop.".into())
+        Action::WebSearch { .. } | Action::WebFetch { .. } | Action::Mcp { .. } => {
+            failed("Web and MCP tools are run by the agent loop.".into())
         }
     }
 }

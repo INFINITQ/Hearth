@@ -322,7 +322,9 @@ full_blob, model_label, finish_reason, status streaming|complete|interrupted|err
   - Windows: windows 0.62 (Job Objects, Toolhelp32, DPAPI, ConPTY); which. Terminals use ConPTY
     directly (`terminal/pty.rs`) rather than portable-pty, so a shell can start suspended and
     join its Job Object before it runs.
-  - MCP: rmcp `=3.8.0`, behind one module, with stderr piped.
+  - MCP: Hearth's own small client (`mcp/client.rs`) rather than rmcp, which released a new
+    major version every few weeks through 2026; only `initialize`, `tools/list` and
+    `tools/call` are needed. Stderr is piped and kept.
   - Web: dom_smoothie `=0.18.2` (Readability, with its own Markdown output) and dom_query
     `=0.28.0` (the same one it uses); image (png, jpeg, webp, gif).
   - System: nvml-wrapper, sysinfo; tracing.
