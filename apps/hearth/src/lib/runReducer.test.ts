@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyRunEvent, newRun, type TranscriptState, withLiveText } from './runReducer';
+import { applyRunEvent, newRun, type TranscriptState, withLiveText, withNewer } from './runReducer';
 import type { Message, RunEnvelope, RunEvent } from './types';
 
 function message(
@@ -272,5 +272,48 @@ describe('withLiveText', () => {
     };
     expect(withLiveText(saved, run)[0]!.content).toBe('Hello');
     expect(withLiveText(saved, null)[0]!.content).toBe('Hel');
+  });
+});
+
+describe('withNewer', () => {
+  const user = message('u1', 'user', 'Fix add()', null);
+  const read = message('a1', 'assistant', '', 'u1');
+  const answer = message('t1', 'tool', 'def add…', 'a1');
+  const edit = message('a2', 'assistant', 'Fixing that.', 't1');
+  const call = {
+    id: 'c2',
+    type: 'function' as const,
+    function: { name: 'edit_file', arguments: '{}' },
+  };
+
+  it('keeps what a run showed while the transcript was being read', () => {
+    // Read while the edit step was still being written; it finished with its call meanwhile.
+    const saved = [user, read, answer, { ...edit, status: 'streaming' as const }];
+    const shown = [{ ...user, id: 'pending-1' }, read, answer, { ...edit, toolCalls: [call] }];
+    const merged = withNewer(saved, shown);
+    expect(merged.map((m) => m.id)).toEqual(['u1', 'a1', 't1', 'a2']);
+    expect(merged[3]!.toolCalls).toEqual([call]);
+    expect(merged[3]!.status).toBe('complete');
+  });
+
+  it('keeps steps that arrived after the transcript was read', () => {
+    const saved = [user, read];
+    const shown = [{ ...user, id: 'pending-1' }, read, answer, edit];
+    expect(withNewer(saved, shown).map((m) => m.id)).toEqual(['u1', 'a1', 't1', 'a2']);
+  });
+
+  it('a regenerated reply replaces the old one, whichever side saw it first', () => {
+    const old = message('a9', 'assistant', 'Old reply', 'u1');
+    const fresh = message('a10', 'assistant', 'New reply', 'u1');
+    // Its event arrived before the read saw it…
+    expect(withNewer([user, old], [user, fresh]).map((m) => m.id)).toEqual(['u1', 'a10']);
+    // …or the read saw it before its event arrived: the old version isn't brought back.
+    const known = { ...fresh, versions: { index: 1, ids: ['a9', 'a10'] } };
+    expect(withNewer([user, known], [user, old]).map((m) => m.id)).toEqual(['u1', 'a10']);
+  });
+
+  it('leaves out messages that no longer continue the transcript', () => {
+    const stray = message('x1', 'assistant', 'From another branch', 'gone');
+    expect(withNewer([user, read], [user, read, stray]).map((m) => m.id)).toEqual(['u1', 'a1']);
   });
 });

@@ -8,6 +8,7 @@ import {
   applyRunEvent,
   newRun,
   withLiveText,
+  withNewer,
 } from '../lib/runReducer';
 import type {
   AttachmentInfo,
@@ -131,12 +132,17 @@ function handle(event: RunEnvelope) {
   }
 }
 
-/** Reloads the open conversation from the database, keeping any live reply's newest text. */
+/**
+ * Reloads the open conversation from the database, keeping any live reply's newest text. While
+ * a run is going, what its events showed during the read is kept too (taking the copy read as
+ * it was could hide a step until the run ended).
+ */
 async function refresh(id: string) {
   const view = await backend().sessionGet(id);
-  const { session, run } = useChat.getState();
+  const { session, run, messages } = useChat.getState();
   if (session?.id !== id) return;
-  useChat.setState({ session: view.session, messages: withLiveText(view.messages, run) });
+  const saved = withLiveText(view.messages, run);
+  useChat.setState({ session: view.session, messages: run ? withNewer(saved, messages) : saved });
 }
 
 function pendingUser(

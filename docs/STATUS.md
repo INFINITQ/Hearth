@@ -251,6 +251,15 @@ commands with their live output. A Vite plugin fixes xterm.js under `freezeProto
   - **Tests:** Vitest 31 (a render-count test for both transcripts that fails on the old code;
     comparison helpers).
 
+- **Fixed: a step could vanish from the transcript during a run.** After starting a run, the
+  app re-read the conversation from the database and put that copy on screen. When the run's
+  events arrived during the read (likely under load, or with quick tools), a step that had just
+  finished with its tool calls disappeared until the run ended. This was the E2E test that
+  failed once under load ("Ask mode shows the diff first"): the permission card showed, the
+  edit's row didn't. While a run goes on, a re-read now keeps what its events showed
+  (`withNewer` in `lib/runReducer.ts`). A store test reproduces the race with a slow read and
+  fails on the old code; Vitest 36.
+
 ## What's left
 
 - **A run with a real model.** Everything is tested against the mock model server; llama.cpp
@@ -267,5 +276,3 @@ commands with their live output. A Vite plugin fixes xterm.js under `freezeProto
   Streaming and scrolling stay fast; rendering only the messages on screen would be the next
   step if that ever matters.
 - **The installer isn't signed,** so Windows SmartScreen warns the first time.
-- One E2E test ("Ask mode shows the diff first") failed once under heavy load and passed on
-  every rerun; worth watching.

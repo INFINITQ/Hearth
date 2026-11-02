@@ -296,3 +296,26 @@ export function withLiveText(messages: Message[], run: LiveRun | null): Message[
       : m,
   );
 }
+
+/**
+ * The transcript just read from the database while a run is going, merged with what's on screen.
+ * The run's events may have arrived after the read: a message on screen is newer than its copy
+ * read (a step that has since finished with its tool calls), and messages added meanwhile are
+ * kept (the core saves each message before announcing it, so they're real). Kept only when they
+ * continue the transcript and aren't an older version the database already knows (a reply being
+ * regenerated). The user's own message shown while sending ("pending-…") gives way to the saved
+ * one.
+ */
+export function withNewer(saved: Message[], shown: Message[]): Message[] {
+  const onScreen = new Map(shown.map((m) => [m.id, m]));
+  let merged = saved.map((m) => onScreen.get(m.id) ?? m);
+  const known = new Set(merged.map((m) => m.id));
+  const versions = new Set(saved.flatMap((m) => m.versions.ids));
+  for (const message of shown) {
+    if (known.has(message.id) || message.id.startsWith('pending-')) continue;
+    if (!message.parentId || !known.has(message.parentId) || versions.has(message.id)) continue;
+    merged = placeAfterParent(merged, message);
+    known.add(message.id);
+  }
+  return merged;
+}
