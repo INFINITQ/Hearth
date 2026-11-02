@@ -31,7 +31,8 @@ on web search or add a remote server.
   long conversations are summarized when they near the model's limit (nothing is deleted).
 - **Web search:** the **Web** button lets a reply search (DuckDuckGo, or Brave, Tavily or your
   own SearXNG) and read pages, with the sources under the answer. Pages on your PC or network
-  aren't read unless you allow it.
+  aren't read unless you allow it, and until then pages are read without your proxy (allow it
+  if your network only works through one).
 - **Attachments:** text and code files, PDFs (their text) and images (for models with vision),
   picked, dropped or pasted.
 - **Coding sessions:** file tools with diffs, commands in Git Bash or PowerShell (live output, a
@@ -47,6 +48,7 @@ on web search or add a remote server.
 
 Keyboard: **Ctrl+K** commands and conversations · **Ctrl+N** new chat or session · **Ctrl+B**
 sidebar · **Ctrl+,** settings · **Ctrl+`** terminal · **Shift+Tab** permission mode · **Esc** stop.
+On the terminal tabs, **←/→** switch tabs and **Delete** closes a shell.
 
 ## Status
 

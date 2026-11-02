@@ -18,8 +18,9 @@ check the repo's Files tab for exact names and sizes before downloading._
 ## Step 1: install llama.cpp (once)
 
 1. Open <https://github.com/ggml-org/llama.cpp/releases>.
-2. Find the newest release named with a **build number** such as `b11960`. (The release marked
-   "Latest", `v0.8.0` at the time of writing, only contains a text file.)
+2. Find the newest release named with a **build number** such as `b11960`. GitHub labels these
+   "Pre-release"; that's normal, they're the builds everyone uses. (The release marked "Latest",
+   `v0.8.0` at the time of writing, only contains a text file.)
 3. Under **Assets**, download both:
    - `llama-b11960-bin-win-cuda-13.4-x64.zip` (≈165 MB): the programs
    - `cudart-llama-bin-win-cuda-13.4-x64.zip` (≈424 MB): NVIDIA's CUDA runtime files

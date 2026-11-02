@@ -128,14 +128,14 @@ impl Live {
     }
 }
 
-/// The server's last words, for a "stopped" message.
+/// A "stopped" message with the server's last words: the end of what it wrote to stderr (a
+/// crashed Node server's last line is just its version; the reason is a few lines up).
 fn stopped(client: &Client) -> String {
-    format!(
-        "It stopped. {}",
-        client.log().last().cloned().unwrap_or_default()
-    )
-    .trim()
-    .to_owned()
+    let log = client.log();
+    let start = log.len().saturating_sub(4);
+    format!("It stopped.\n{}", log[start..].join("\n"))
+        .trim()
+        .to_owned()
 }
 
 struct Inner {
@@ -585,6 +585,8 @@ impl Mcp {
                 return;
             };
             client.wait_closed().await;
+            // Let its last stderr lines arrive (usually the reason), as `with_log` does.
+            tokio::time::sleep(Duration::from_millis(150)).await;
             this.mark_stopped(&config.id, &client);
         });
         if let Some(live) = lock(&self.0.servers)
@@ -597,7 +599,9 @@ impl Mcp {
         }
     }
 
-    /// The server `client` belongs to stopped (unless it was replaced in the meantime).
+    /// The server `client` belongs to stopped (unless it was replaced in the meantime). The
+    /// client stays, so Settings keeps showing what the server printed; only ready servers are
+    /// called, and restarting, turning off or removing the server lets it go.
     fn mark_stopped(&self, id: &str, client: &Arc<Client>) {
         {
             let mut servers = lock(&self.0.servers);
@@ -610,7 +614,6 @@ impl Mcp {
             }) else {
                 return;
             };
-            live.client = None;
             live.state = ServerState::Failed {
                 error: stopped(client),
             };

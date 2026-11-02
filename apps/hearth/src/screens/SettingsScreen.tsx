@@ -229,7 +229,7 @@ function WebSettings() {
       )}
       <Row
         label="Read pages on this PC and your network"
-        hint="Off keeps web tools on the internet, so a web page can't point them at your router or local servers."
+        hint="Off keeps web tools on the internet, so a web page can't point them at your router or local servers. Off, pages are also read without your proxy; turn this on if your network needs one."
       >
         <input
           type="checkbox"

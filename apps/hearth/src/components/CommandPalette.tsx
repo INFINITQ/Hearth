@@ -17,7 +17,7 @@ import {
   Sun,
 } from 'lucide-react';
 import { Dialog } from 'radix-ui';
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { cn } from '../lib/cn';
 import { useApp } from '../stores/app';
 import { useChat } from '../stores/chat';
@@ -170,9 +170,20 @@ export function CommandPalette() {
   const [query, setQuery] = useState('');
   const [index, setIndex] = useState(0);
   const list = useRef<HTMLDivElement>(null);
+  const ids = useId();
   // Built when it opens, so labels reflect the current state.
   const all = useMemo(() => (open ? [...actions(), ...conversations()] : []), [open]);
   const shown = useMemo(() => all.filter((c) => matches(c.label, query)), [all, query]);
+  // Consecutive commands of one group, each with its place in `shown`.
+  const groups = useMemo(() => {
+    const out: { name: string; items: { command: Command; i: number }[] }[] = [];
+    shown.forEach((command, i) => {
+      const last = out.at(-1);
+      if (last?.name === command.group) last.items.push({ command, i });
+      else out.push({ name: command.group, items: [{ command, i }] });
+    });
+    return out;
+  }, [shown]);
 
   useEffect(() => {
     setIndex(0);
@@ -191,7 +202,10 @@ export function CommandPalette() {
     command.run();
   };
 
-  let group = '';
+  // The ARIA combobox pattern: the focus stays in the search box, which points at the option
+  // the arrow keys reach (aria-activedescendant), so screen readers announce it.
+  const listId = `${ids}-list`;
+  const optionId = (i: number) => `${ids}-option-${i}`;
   return (
     <Dialog.Root open={open} onOpenChange={(next) => useApp.getState().setPalette(next)}>
       <Dialog.Portal>
@@ -205,11 +219,18 @@ export function CommandPalette() {
             <Search className="size-4 shrink-0 text-text-3" />
             <input
               autoFocus
+              role="combobox"
               aria-label="Search commands and conversations"
+              aria-autocomplete="list"
+              aria-expanded={shown.length > 0}
+              aria-controls={shown.length > 0 ? listId : undefined}
+              aria-activedescendant={shown[index] ? optionId(index) : undefined}
               placeholder="Type a command or a conversation…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
+                // Enter and the arrows finish or move through an IME composition: not ours.
+                if (e.nativeEvent.isComposing) return;
                 if (e.key === 'ArrowDown') {
                   e.preventDefault();
                   setIndex((i) => Math.min(shown.length - 1, i + 1));
@@ -224,49 +245,52 @@ export function CommandPalette() {
               className="h-12 min-w-0 flex-1 bg-transparent text-[14.5px] outline-none select-text placeholder:text-text-3"
             />
           </div>
-          <div
-            ref={list}
-            role="listbox"
-            aria-label="Commands"
-            className="max-h-[52vh] overflow-y-auto p-1.5"
-          >
-            {shown.length === 0 && (
-              <p className="px-3 py-6 text-center text-[13px] text-text-3">Nothing matches.</p>
-            )}
-            {shown.map((command, i) => {
-              const heading = command.group !== group ? command.group : null;
-              group = command.group;
-              return (
-                <div key={command.id}>
-                  {heading && (
-                    <p className="px-2.5 pb-1 pt-2 text-[11.5px] font-medium text-text-3">
-                      {heading}
-                    </p>
-                  )}
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={i === index}
-                    data-index={i}
-                    onMouseMove={() => setIndex(i)}
-                    onClick={() => run(command)}
-                    className={cn(
-                      'flex h-9 w-full items-center gap-2.5 rounded-control px-2.5 text-left text-[13.5px] [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:stroke-[1.75]',
-                      i === index ? 'bg-surface-3 text-text' : 'text-text-2',
-                    )}
+          {shown.length === 0 ? (
+            <p className="px-3 py-6 text-center text-[13px] text-text-3">Nothing matches.</p>
+          ) : (
+            <div
+              ref={list}
+              id={listId}
+              role="listbox"
+              aria-label="Commands"
+              className="max-h-[52vh] overflow-y-auto p-1.5"
+            >
+              {groups.map((group, n) => (
+                <div key={group.name} role="group" aria-labelledby={`${ids}-group-${n}`}>
+                  <p
+                    id={`${ids}-group-${n}`}
+                    className="px-2.5 pb-1 pt-2 text-[11.5px] font-medium text-text-3"
                   >
-                    {command.icon}
-                    <span className="min-w-0 flex-1 truncate">{command.label}</span>
-                    {command.shortcut && (
-                      <kbd className="shrink-0 font-sans text-[11.5px] text-text-3">
-                        {command.shortcut}
-                      </kbd>
-                    )}
-                  </button>
+                    {group.name}
+                  </p>
+                  {group.items.map(({ command, i }) => (
+                    // Not a tab stop: the keyboard reaches options through the search box.
+                    <div
+                      key={command.id}
+                      id={optionId(i)}
+                      role="option"
+                      aria-selected={i === index}
+                      data-index={i}
+                      onMouseMove={() => setIndex(i)}
+                      onClick={() => run(command)}
+                      className={cn(
+                        'flex h-9 w-full items-center gap-2.5 rounded-control px-2.5 text-left text-[13.5px] [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:stroke-[1.75]',
+                        i === index ? 'bg-surface-3 text-text' : 'text-text-2',
+                      )}
+                    >
+                      {command.icon}
+                      <span className="min-w-0 flex-1 truncate">{command.label}</span>
+                      {command.shortcut && (
+                        <kbd className="shrink-0 font-sans text-[11.5px] text-text-3">
+                          {command.shortcut}
+                        </kbd>
+                      )}
+                    </div>
+                  ))}
                 </div>
-              );
-            })}
-          </div>
+              ))}
+            </div>
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

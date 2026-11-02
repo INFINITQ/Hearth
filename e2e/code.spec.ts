@@ -388,12 +388,28 @@ test.describe('commands, changes, undo and steering', () => {
     await page.waitForTimeout(150);
     await page.screenshot({ path: join(dir, 'm7-agent-tab-dark.png') });
 
-    // The ARIA tabs pattern: the arrow keys move between tabs, Delete closes a shell.
+    // The ARIA tabs pattern: the arrow keys move between tabs, Delete closes a shell, and a
+    // held Delete (its repeats) doesn't go on to close the next one.
+    await panel.getByRole('button', { name: 'New terminal' }).click();
+    await page.getByRole('menuitem', { name: 'Git Bash' }).click();
     const agentTab = panel.getByRole('tab', { name: 'Agent' });
-    const bashTab = panel.getByRole('tab', { name: 'Git Bash' });
-    await agentTab.press('ArrowRight');
+    const bashTab = panel.getByRole('tab', { name: 'Git Bash', exact: true });
+    const secondTab = panel.getByRole('tab', { name: 'Git Bash 2' });
+    await expect(secondTab).toHaveAttribute('aria-selected', 'true');
+    await agentTab.focus();
+    await page.keyboard.press('ArrowRight');
     await expect(bashTab).toBeFocused();
     await expect(bashTab).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('ArrowRight');
+    await expect(secondTab).toBeFocused();
+
+    await page.keyboard.down('Delete');
+    await expect(secondTab).toHaveCount(0);
+    await expect(bashTab).toBeFocused();
+    await page.keyboard.down('Delete'); // the key is still down: a repeat
+    await page.keyboard.up('Delete');
+    await expect(bashTab).toHaveCount(1);
+
     await bashTab.press('Delete');
     await expect(bashTab).toHaveCount(0);
     await expect(agentTab).toHaveAttribute('aria-selected', 'true');

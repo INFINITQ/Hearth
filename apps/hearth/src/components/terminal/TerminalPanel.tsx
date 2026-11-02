@@ -182,7 +182,8 @@ function Tab({
       // A click moves into the shell; Enter or Space (detail 0) leaves the focus on the tab.
       onClick={(event) => useTerminal.getState().select(id, event.detail > 0)}
       onKeyDown={(event) => {
-        if (event.key !== 'Delete' || !onClose) return;
+        // A held key repeats: without the check it would close one shell after another.
+        if (event.key !== 'Delete' || !onClose || event.repeat) return;
         event.preventDefault();
         const list = event.currentTarget.closest('[role="tablist"]');
         onClose(false);

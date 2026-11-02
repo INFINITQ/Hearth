@@ -260,6 +260,26 @@ commands with their live output. A Vite plugin fixes xterm.js under `freezeProto
   (`withNewer` in `lib/runReducer.ts`). A store test reproduces the race with a slow read and
   fails on the old code; Vitest 36.
 
+- **Second code review** (M11, the accessibility pass, long conversations): no serious problems.
+  Fixed what it found:
+  - An MCP server that stopped lost what it had printed (Settings showed nothing), and the
+    message kept only its last line (for a crashed Node server, just its version). The log now
+    stays, and the message has the last four lines once they've arrived.
+  - The Ctrl+K palette ran the highlighted command on the Enter that finishes an IME
+    composition (Japanese, Chinese…), and screen readers weren't told which option was
+    highlighted: it's now a proper combobox (`aria-activedescendant`, grouped options that
+    aren't tab stops).
+  - Holding Delete on a terminal tab closed one shell after another.
+  - With a proxy on the PC, page reading (which leaves the proxy out while local addresses are
+    refused) failed with a bare "Couldn't reach…": the error and the Settings → Web hint now
+    say why and what to turn on.
+  - **Tests:** the MCP tests check the log survives; the smoke test covers the combobox and the
+    IME Enter; the terminal test holds Delete.
+
+- **Idle memory** (release build, empty chat): 178 MB private memory across `hearth.exe`
+  (6 MB) and its six WebView2 processes, under the plan's 300 MB target. (Their working sets add
+  up to 385 MB, but that counts the pages they share several times.)
+
 ## What's left
 
 - **A run with a real model.** Everything is tested against the mock model server; llama.cpp

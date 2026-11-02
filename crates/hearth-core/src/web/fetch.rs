@@ -14,6 +14,8 @@ use futures_util::StreamExt;
 use regex::Regex;
 use reqwest::Url;
 use reqwest::header::{ACCEPT, CONTENT_TYPE, LOCATION};
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+use windows::core::w;
 
 use super::{USER_AGENT, WebError};
 
@@ -30,6 +32,41 @@ pub struct Page {
 /// Bigger pages are cut (their start is what matters).
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 const MAX_REDIRECTS: usize = 5;
+
+/// Added when a page can't be reached directly on a PC that uses a proxy.
+const PROXY_HINT: &str = " This PC uses a proxy, which page reading leaves out (a proxy would \
+    look the address up again, past the check for local addresses). If this network only \
+    works through the proxy, turn on “Read pages on this PC and your network” in \
+    Settings → Web.";
+
+/// Whether this PC sends web traffic through a proxy: the Windows setting, or the usual
+/// environment variables (which search, through reqwest, follows too).
+fn uses_proxy() -> bool {
+    let from_env = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"]
+        .iter()
+        .any(|name| {
+            [name.to_string(), name.to_ascii_lowercase()]
+                .iter()
+                .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+        });
+    let mut enabled = 0u32;
+    let mut size = size_of::<u32>() as u32;
+    // SAFETY: the value and its size in bytes are valid for the call.
+    let from_windows = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"),
+            w!("ProxyEnable"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut enabled).cast()),
+            Some(&mut size),
+        )
+    }
+    .is_ok()
+        && enabled != 0;
+    from_env || from_windows
+}
 
 /// An address on the public internet (not this PC, the local network or a reserved range).
 pub fn is_public(ip: IpAddr) -> bool {
@@ -141,10 +178,15 @@ pub(super) async fn fetch(
             .send()
             .await
             .map_err(|err| {
-                if err.is_timeout() {
-                    WebError::Network(format!("{host} took too long to answer."))
+                let hint = if !allow_local && uses_proxy() {
+                    PROXY_HINT
                 } else {
-                    WebError::Network(format!("Couldn't reach {host}: {err}"))
+                    ""
+                };
+                if err.is_timeout() {
+                    WebError::Network(format!("{host} took too long to answer.{hint}"))
+                } else {
+                    WebError::Network(format!("Couldn't reach {host}: {err}{hint}"))
                 }
             })?;
         let status = response.status();

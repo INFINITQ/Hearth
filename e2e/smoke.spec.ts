@@ -64,6 +64,14 @@ test('a new install shows the setup steps, the guide and the command palette', a
   const search = page.getByLabel('Search commands and conversations');
   await page.keyboard.press('Control+K');
   await search.fill('settings');
+  // A combobox that tells screen readers which option the arrow keys reached.
+  const combobox = page.getByRole('combobox', { name: 'Search commands and conversations' });
+  const active = await combobox.getAttribute('aria-activedescendant');
+  await expect(page.locator(`[id="${active}"]`)).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('option').first()).not.toHaveAttribute('tabindex', '0');
+  // Enter that finishes an IME composition (Japanese, Chinese…) runs nothing.
+  await search.dispatchEvent('keydown', { key: 'Enter', isComposing: true });
+  await expect(search).toBeVisible();
   await page.keyboard.press('Enter');
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
   await expect(search).toHaveCount(0);

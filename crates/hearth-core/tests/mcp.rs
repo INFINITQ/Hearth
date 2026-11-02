@@ -157,10 +157,23 @@ async fn a_server_that_dies_mid_call_is_marked_failed() {
         .await
         .unwrap_err();
     assert!(err.contains("stopped"), "{err}");
-    assert!(matches!(
-        mcp.servers()[0].status,
-        ServerState::Failed { .. }
-    ));
+    // The reason (its last stderr lines) reaches the message, and Settings keeps its log.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let server = &mcp.servers()[0];
+        if let ServerState::Failed { error } = &server.status
+            && error.contains("fake-mcp crashed")
+        {
+            assert!(server.log.iter().any(|l| l == "fake-mcp crashed"));
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{:#?}",
+            mcp.servers()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 #[tokio::test]
@@ -182,7 +195,12 @@ async fn a_server_that_quits_on_its_own_shows_as_stopped_without_a_call() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     };
     assert!(error.contains("stopped"), "{error}");
+    assert!(error.contains("fake-mcp quit"), "{error}");
     assert!(mcp.tools().is_empty());
+    // What it printed stays visible in Settings after it stopped.
+    let log = &mcp.servers()[0].log;
+    assert!(log.iter().any(|l| l == "fake-mcp ready"), "{log:?}");
+    assert!(log.iter().any(|l| l == "fake-mcp quit"), "{log:?}");
 }
 
 #[tokio::test]
