@@ -5,6 +5,7 @@
 //! sibling, and the session remembers which leaf is active. The conversation shown (and sent to
 //! the model) is the path from the root to that leaf.
 
+mod connections;
 mod messages;
 mod migrations;
 mod search;
@@ -13,9 +14,10 @@ mod sessions;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
-use rusqlite::Connection;
+use rusqlite::Connection as Db;
 use serde_json::Value;
 
+pub use connections::{Connection, ConnectionInput};
 pub use messages::{Message, MessageFinish, MessageRole, MessageStatus, NewMessage};
 pub use search::SearchHit;
 pub use sessions::{Mode, Session, SessionPatch, SessionSummary};
@@ -33,21 +35,21 @@ pub enum StoreError {
 pub type Result<T, E = StoreError> = std::result::Result<T, E>;
 
 pub struct Store {
-    conn: Mutex<Connection>,
+    conn: Mutex<Db>,
 }
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
-        let conn = Connection::open(path)?;
+        let conn = Db::open(path)?;
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
         Self::init(conn)
     }
 
     pub fn open_in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?)
+        Self::init(Db::open_in_memory()?)
     }
 
-    fn init(mut conn: Connection) -> Result<Self> {
+    fn init(mut conn: Db) -> Result<Self> {
         conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")?;
         migrations::apply(&mut conn)?;
         // Replies that were streaming when Hearth last stopped will never finish.
@@ -60,7 +62,7 @@ impl Store {
         })
     }
 
-    fn conn(&self) -> MutexGuard<'_, Connection> {
+    fn conn(&self) -> MutexGuard<'_, Db> {
         self.conn
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())

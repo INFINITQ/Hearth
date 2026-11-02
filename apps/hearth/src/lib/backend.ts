@@ -1,7 +1,25 @@
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { type Boot, DEFAULT_SETTINGS, type Settings, type SystemInfo } from './types';
+import { fakeChat } from './fakeChat';
+import {
+  type Boot,
+  type ChatAction,
+  type Connection,
+  type ConnectionInput,
+  DEFAULT_SETTINGS,
+  type Mode,
+  type RunEnvelope,
+  type RunInfo,
+  type SearchHit,
+  type Session,
+  type SessionPatch,
+  type SessionSummary,
+  type SessionView,
+  type Settings,
+  type StartedRun,
+  type SystemInfo,
+} from './types';
 
 export type CaptionState = 'enter' | 'leave' | 'press' | 'release';
 
@@ -19,13 +37,41 @@ export interface WindowControls {
 }
 
 /** A JSON merge patch for the settings: `null` resets a value to its default. */
-export type SettingsPatch = { [K in keyof Settings]?: Settings[K] | null };
+export type SettingsPatch = { [K in keyof Settings]?: Partial<Settings[K]> | Settings[K] | null };
+
+/** Conversations, runs and connections. */
+export interface ChatBackend {
+  sessionsList(mode: Mode): Promise<SessionSummary[]>;
+  sessionCreate(mode: Mode): Promise<Session>;
+  sessionGet(id: string): Promise<SessionView>;
+  sessionUpdate(id: string, patch: SessionPatch): Promise<Session>;
+  sessionDelete(id: string): Promise<void>;
+  branchSelect(sessionId: string, messageId: string): Promise<SessionView>;
+  search(query: string, mode?: Mode): Promise<SearchHit[]>;
+  sessionExport(id: string, format: 'md' | 'json'): Promise<string | null>;
+  connectionsList(): Promise<Connection[]>;
+  connectionSave(input: ConnectionInput): Promise<Connection>;
+  connectionDelete(id: string): Promise<void>;
+  connectionModels(id: string): Promise<string[]>;
+  connectionTest(baseUrl: string, apiKey?: string | null): Promise<string[]>;
+  runStart(
+    sessionId: string,
+    action: ChatAction,
+    onEvent: (e: RunEnvelope) => void,
+  ): Promise<StartedRun>;
+  runAttach(runId: string, onEvent: (e: RunEnvelope) => void): Promise<boolean>;
+  runCancel(runId: string): Promise<boolean>;
+  runsActive(): Promise<RunInfo[]>;
+  onSessionsChanged(listener: () => void): () => void;
+  onRunState(listener: (info: RunInfo) => void): () => void;
+  openLink(url: string): Promise<void>;
+}
 
 /**
  * Everything the UI asks of the outside world. The app uses Tauri; unit tests and a plain
  * browser (`pnpm dev:web`) use an in-memory fake.
  */
-export interface Backend {
+export interface Backend extends ChatBackend {
   readonly kind: 'tauri' | 'fake';
   boot(): Boot;
   appReady(): Promise<void>;
@@ -66,6 +112,12 @@ function subscribe<T>(event: string, listener: (payload: T) => void): () => void
   return unsubscriber(listen<T>(event, (e) => listener(e.payload)));
 }
 
+function channel(onEvent: (e: RunEnvelope) => void): Channel<RunEnvelope> {
+  const next = new Channel<RunEnvelope>();
+  next.onmessage = onEvent;
+  return next;
+}
+
 export function tauriBackend(): Backend {
   const win = getCurrentWindow();
   return {
@@ -77,6 +129,30 @@ export function tauriBackend(): Backend {
     settingsSet: (patch) => invoke<Settings>('settings_set', { patch }),
     onSettings: (listener) => subscribe<Settings>('hearth://settings', listener),
     setWindowDark: (dark) => invoke('window_set_dark', { dark }),
+
+    sessionsList: (mode) => invoke('sessions_list', { mode }),
+    sessionCreate: (mode) => invoke('session_create', { mode }),
+    sessionGet: (id) => invoke('session_get', { id }),
+    sessionUpdate: (id, patch) => invoke('session_update', { id, patch }),
+    sessionDelete: (id) => invoke('session_delete', { id }),
+    branchSelect: (sessionId, messageId) => invoke('branch_select', { sessionId, messageId }),
+    search: (query, mode) => invoke('search', { query, mode: mode ?? null }),
+    sessionExport: (id, format) => invoke('session_export', { id, format }),
+    connectionsList: () => invoke('connections_list'),
+    connectionSave: (input) => invoke('connection_save', { input }),
+    connectionDelete: (id) => invoke('connection_delete', { id }),
+    connectionModels: (id) => invoke('connection_models', { id }),
+    connectionTest: (baseUrl, apiKey) =>
+      invoke('connection_test', { baseUrl, apiKey: apiKey ?? null }),
+    runStart: (sessionId, action, onEvent) =>
+      invoke('run_start', { args: { sessionId, action }, channel: channel(onEvent) }),
+    runAttach: (runId, onEvent) => invoke('run_attach', { runId, channel: channel(onEvent) }),
+    runCancel: (runId) => invoke('run_cancel', { runId }),
+    runsActive: () => invoke('runs_active'),
+    onSessionsChanged: (listener) => subscribe<null>('hearth://sessions', () => listener()),
+    onRunState: (listener) => subscribe<RunInfo>('hearth://run-state', listener),
+    openLink: (url) => invoke('open_link', { url }),
+
     window: {
       minimize: () => void win.minimize(),
       toggleMaximize: () => void win.toggleMaximize(),
@@ -108,7 +184,11 @@ export function fakeBackend(initial: Partial<Settings> = {}): Backend {
     settingsSet: async (patch) => {
       const next: Record<string, unknown> = { ...settings };
       for (const [key, value] of Object.entries(patch)) {
-        next[key] = value === null ? DEFAULT_SETTINGS[key as keyof Settings] : value;
+        const fallback = DEFAULT_SETTINGS[key as keyof Settings];
+        if (value === null) next[key] = fallback;
+        else if (typeof value === 'object' && !Array.isArray(value) && typeof fallback === 'object')
+          next[key] = { ...(next[key] as object), ...value };
+        else next[key] = value;
       }
       settings = next as Settings;
       listeners.forEach((listener) => listener(settings));
@@ -119,6 +199,7 @@ export function fakeBackend(initial: Partial<Settings> = {}): Backend {
       return () => listeners.delete(listener);
     },
     setWindowDark: async () => {},
+    ...fakeChat(),
     window: {
       minimize: noop,
       toggleMaximize: noop,
@@ -145,4 +226,10 @@ export function backend(): Backend {
 /** Tests swap in their own backend. */
 export function setBackend(next: Backend) {
   current = next;
+}
+
+/** A readable message from whatever a backend call threw. */
+export function errorMessage(err: unknown): string {
+  if (err && typeof err === 'object' && 'message' in err) return String(err.message);
+  return String(err);
 }

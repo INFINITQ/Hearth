@@ -23,6 +23,36 @@ pub enum Theme {
     Dark,
 }
 
+/// Which model to use. For now a model on a connection (a server Hearth talks to); Hearth's own
+/// managed llama-server presets join in M5.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ModelRef {
+    Connection {
+        connection_id: String,
+        model: String,
+    },
+}
+
+/// The default model for each job (each chat or session can override it).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ModelRoles {
+    pub chat: Option<ModelRef>,
+    pub code: Option<ModelRef>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ChatSettings {
+    /// Replaces Hearth's default chat system prompt when set.
+    pub system_prompt: Option<String>,
+}
+
 /// Everything the user can change. New fields need `#[serde(default)]` semantics (the struct
 /// is `default`), so settings files from older versions keep loading.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -30,6 +60,8 @@ pub enum Theme {
 pub struct Settings {
     pub theme: Theme,
     pub sidebar_collapsed: bool,
+    pub models: ModelRoles,
+    pub chat: ChatSettings,
 }
 
 #[derive(Debug, thiserror::Error)]

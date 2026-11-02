@@ -27,7 +27,7 @@ pub fn create_main(app: &AppHandle<Wry>, data_dir: &Path) -> Result<()> {
 
     // Settings and the Windows theme are handed over before the page loads, so the first
     // paint already has the right theme.
-    let settings = app.state::<SettingsStore>().get();
+    let settings = app.state::<std::sync::Arc<SettingsStore>>().get();
     let system_dark = theme::system_prefers_dark();
     let dark = match settings.theme {
         Theme::Dark => true,

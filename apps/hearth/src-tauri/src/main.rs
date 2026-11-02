@@ -7,17 +7,23 @@
 compile_error!("Hearth targets Windows 11 only.");
 
 mod caption;
+mod chat_commands;
 mod commands;
 mod error;
 mod guard;
+mod links;
 mod theme;
 mod webview2;
 mod window;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use hearth_core::chat::{Chat, StoreResolver};
+use hearth_core::runs::RunManager;
 use hearth_core::settings::SettingsStore;
-use tauri::Manager;
+use hearth_core::store::{ConnectionInput, Store, StoreError};
+use tauri::{Emitter, Manager};
 
 pub use error::{Error, Result};
 
@@ -46,11 +52,44 @@ fn main() {
             commands::settings_set,
             commands::window_set_dark,
             commands::caption_maximize_rect,
+            chat_commands::sessions_list,
+            chat_commands::session_create,
+            chat_commands::session_get,
+            chat_commands::session_update,
+            chat_commands::session_delete,
+            chat_commands::branch_select,
+            chat_commands::search,
+            chat_commands::session_export,
+            chat_commands::connections_list,
+            chat_commands::connection_save,
+            chat_commands::connection_delete,
+            chat_commands::connection_models,
+            chat_commands::connection_test,
+            chat_commands::run_start,
+            chat_commands::run_attach,
+            chat_commands::run_cancel,
+            chat_commands::runs_active,
+            chat_commands::open_link,
         ])
         .setup(|app| {
             let data = data_dir(app.handle())?;
             std::fs::create_dir_all(&data)?;
-            app.manage(SettingsStore::open(data.join("settings.json")));
+            let settings = Arc::new(SettingsStore::open(data.join("settings.json")));
+            let store = Arc::new(open_store(&data.join("hearth.db"))?);
+            seed_test_connection(&store, &settings);
+
+            let runs = Arc::new(RunManager::new());
+            let handle = app.handle().clone();
+            runs.on_change(move |info| {
+                let _ = handle.emit_to(window::MAIN, chat_commands::RUN_STATE_EVENT, info);
+            });
+            let resolver = Arc::new(StoreResolver::new(store.clone()));
+            let chat = Chat::new(store.clone(), runs.clone(), resolver, settings.clone());
+
+            app.manage(settings);
+            app.manage(store);
+            app.manage(runs);
+            app.manage(chat);
             app.manage(DataDir(data.clone()));
             window::create_main(app.handle(), &data)?;
             Ok(())
@@ -69,4 +108,47 @@ fn data_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<PathB
         Some(dir) => Ok(dir),
         None => app.path().app_local_data_dir(),
     }
+}
+
+/// Opens the conversation database. A damaged one is kept aside (never deleted) and a fresh one
+/// started, so Hearth always opens.
+fn open_store(path: &Path) -> std::result::Result<Store, String> {
+    match Store::open(path) {
+        Ok(store) => Ok(store),
+        Err(StoreError::Sqlite(err)) => {
+            let aside = path.with_extension(format!("db.damaged-{}", hearth_core::now_ms()));
+            let _ = std::fs::rename(path, &aside);
+            Store::open(path).map_err(|fresh| {
+                format!("The conversation database is damaged ({err}), and a new one couldn't be created ({fresh}).")
+            })
+        }
+        Err(other) => Err(other.to_string()),
+    }
+}
+
+/// Test runs started with `HEARTH_TEST_LLM_URL` get a "Mock" connection as their default model.
+fn seed_test_connection(store: &Store, settings: &SettingsStore) {
+    let Some(url) = guard::test_llm_url() else {
+        return;
+    };
+    let exists = store
+        .connections()
+        .map(|all| all.iter().any(|c| c.name == "Mock"))
+        .unwrap_or(false);
+    if exists {
+        return;
+    }
+    let input = ConnectionInput {
+        id: None,
+        name: "Mock".into(),
+        base_url: url,
+        api_key: None,
+        llama_extensions: true,
+    };
+    let Ok(connection) = store.save_connection(&input) else {
+        return;
+    };
+    let model = serde_json::json!({ "kind": "connection", "connectionId": connection.id, "model": "mock-model" });
+    let _ =
+        settings.update(&serde_json::json!({ "models": { "chat": model.clone(), "code": model } }));
 }

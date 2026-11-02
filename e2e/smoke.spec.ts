@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+﻿import { expect, test } from '@playwright/test';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type RunningApp, launchApp, trackViolations } from './app';
@@ -32,7 +32,7 @@ test('starts on the chat screen with the sidebar, window controls and bundled fo
 
 test('the theme setting switches to dark and is saved', async () => {
   const { page } = app;
-  await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('radio', { name: 'Dark' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await expect
@@ -119,13 +119,13 @@ test('screenshots of every screen in light and dark, for visual review', async (
   mkdirSync(dir, { recursive: true });
   await page.setViewportSize({ width: 1280, height: 800 }).catch(() => {});
   for (const theme of ['Light', 'Dark']) {
-    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('radio', { name: theme }).click();
     for (const [name, open] of [
       ['chat', () => page.getByRole('radio', { name: 'Chat' }).click()],
       ['code', () => page.getByRole('radio', { name: 'Code' }).click()],
       ['models', () => page.getByRole('button', { name: 'Models' }).click()],
-      ['settings', () => page.getByRole('button', { name: 'Settings' }).click()],
+      ['settings', () => page.getByRole('button', { name: 'Settings', exact: true }).click()],
     ] as const) {
       await open();
       await page.waitForTimeout(150);

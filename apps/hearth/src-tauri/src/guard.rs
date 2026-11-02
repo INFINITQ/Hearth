@@ -70,6 +70,30 @@ pub fn test_data_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// A debug-build test value from the environment (always `None` in release builds).
+fn test_value(name: &str) -> Option<String> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+/// `HEARTH_TEST_LLM_URL`: a mock model server; Hearth adds it as the "Mock" connection and
+/// makes it the default chat and coding model.
+pub fn test_llm_url() -> Option<String> {
+    test_value("HEARTH_TEST_LLM_URL")
+}
+
+/// `HEARTH_TEST_SAVE_PATH`: where Save dialogs "save" in tests.
+pub fn test_save_path() -> Option<PathBuf> {
+    test_value("HEARTH_TEST_SAVE_PATH").map(PathBuf::from)
+}
+
+/// `HEARTH_TEST_LINKS`: links the app would open are appended to this file instead.
+pub fn test_links_file() -> Option<PathBuf> {
+    test_value("HEARTH_TEST_LINKS").map(PathBuf::from)
+}
+
 /// Shows an error box and exits. Used before (or instead of) a working UI.
 pub fn fatal(message: &str) -> ! {
     let text = HSTRING::from(message);

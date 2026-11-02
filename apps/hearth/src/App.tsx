@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Sidebar } from './components/Sidebar';
+import { Sidebar, newConversation } from './components/Sidebar';
 import { TitleBar } from './components/TitleBar';
 import { backend } from './lib/backend';
 import { applyTheme, resolveTheme, watchSystemTheme } from './lib/theme';
@@ -7,15 +7,8 @@ import { ChatScreen } from './screens/ChatScreen';
 import { CodeScreen } from './screens/CodeScreen';
 import { ModelsScreen } from './screens/ModelsScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
-import { type Screen, useApp } from './stores/app';
-
-// Pages with their own heading leave the title bar empty; chats will show their title here.
-const TITLES: Record<Screen, string> = {
-  chat: '',
-  code: '',
-  models: '',
-  settings: '',
-};
+import { useApp } from './stores/app';
+import { useChat } from './stores/chat';
 
 export function App() {
   const screen = useApp((s) => s.screen);
@@ -35,13 +28,14 @@ export function App() {
     () => backend().onSettings((settings) => useApp.getState().applySettings(settings)),
     [],
   );
+  useConversations();
   useShortcuts();
 
   return (
     <div className="hearth-app flex h-full bg-bg text-text" data-screen={screen}>
       {!collapsed && <Sidebar />}
       <div className="flex min-w-0 flex-1 flex-col">
-        <TitleBar title={TITLES[screen]} />
+        <TitleBar />
         <main className="flex min-h-0 flex-1 flex-col">
           {screen === 'chat' && <ChatScreen />}
           {screen === 'code' && <CodeScreen />}
@@ -51,6 +45,25 @@ export function App() {
       </div>
     </div>
   );
+}
+
+/** Keeps the sidebar lists and "writing…" spinners in step with Rust. */
+function useConversations() {
+  useEffect(() => {
+    const chat = useChat.getState();
+    void chat.loadLists();
+    void backend()
+      .runsActive()
+      .then((runs) => runs.forEach((run) => useChat.getState().setBusy(run.sessionId, run.runId)));
+    const stopSessions = backend().onSessionsChanged(() => void useChat.getState().loadLists());
+    const stopRuns = backend().onRunState((info) =>
+      useChat.getState().setBusy(info.sessionId, info.state === 'finished' ? null : info.runId),
+    );
+    return () => {
+      stopSessions();
+      stopRuns();
+    };
+  }, []);
 }
 
 /** App-wide keyboard shortcuts (WebView2's own browser shortcuts are switched off). */
@@ -68,7 +81,7 @@ function useShortcuts() {
         app.go('settings');
       } else if (key === 'n' && !event.shiftKey) {
         event.preventDefault();
-        app.setMode(app.mode);
+        newConversation(app.mode);
       }
     };
     window.addEventListener('keydown', onKey);

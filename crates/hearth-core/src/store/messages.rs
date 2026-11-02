@@ -390,6 +390,23 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The messages from the root down to `message_id` (inclusive).
+    pub fn path_to(&self, message_id: &str) -> Result<Vec<Message>> {
+        let conn = self.conn();
+        message_in(&conn, message_id)?;
+        let mut statement = conn.prepare(&format!(
+            "WITH RECURSIVE path(id, depth) AS (
+               SELECT id, 0 FROM messages WHERE id = ?1
+               UNION ALL
+               SELECT m.parent_id, p.depth + 1 FROM messages m JOIN path p ON m.id = p.id
+               WHERE m.parent_id IS NOT NULL
+             )
+             SELECT {COLUMNS} FROM messages JOIN path USING (id) ORDER BY path.depth DESC"
+        ))?;
+        let rows = statement.query_map([message_id], row_to_message)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The versions of a message: it and its siblings (same parent), oldest first.
     pub fn siblings(&self, message_id: &str) -> Result<Vec<String>> {
         let conn = self.conn();

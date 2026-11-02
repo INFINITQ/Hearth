@@ -2,12 +2,19 @@ import { PanelLeft, SquarePen } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { type WindowControls, backend } from '../lib/backend';
 import { useApp } from '../stores/app';
+import { useChat } from '../stores/chat';
+import { ModelPicker } from './ModelPicker';
+import { newConversation } from './Sidebar';
 import { IconButton } from './ui/Button';
 
-/** The top of the main area: a drag region, the page title and the window's caption buttons. */
-export function TitleBar({ title }: { title: string }) {
+/** The top of the main area: conversation title, model picker and the window's caption buttons. */
+export function TitleBar() {
   const collapsed = useApp((s) => s.settings.sidebarCollapsed);
   const mode = useApp((s) => s.mode);
+  const screen = useApp((s) => s.screen);
+  const session = useChat((s) => s.session);
+  const inConversation = screen === 'chat' || screen === 'code';
+  const title = inConversation && session?.mode === screen ? session.title : '';
   const focused = useWindowFocus();
   return (
     <header
@@ -27,7 +34,7 @@ export function TitleBar({ title }: { title: string }) {
           <IconButton
             label={mode === 'code' ? 'New session' : 'New chat'}
             shortcut="Ctrl+N"
-            onClick={() => useApp.getState().setMode(mode)}
+            onClick={() => newConversation(mode)}
           >
             <SquarePen />
           </IconButton>
@@ -39,6 +46,7 @@ export function TitleBar({ title }: { title: string }) {
       >
         {title}
       </div>
+      {inConversation && <ModelPicker />}
       <CaptionButtons controls={backend().window} />
     </header>
   );

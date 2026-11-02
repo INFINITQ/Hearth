@@ -1,5 +1,6 @@
 import { Monitor, Moon, Sun } from 'lucide-react';
 import { type ReactNode, useEffect, useState } from 'react';
+import { ConnectionsSettings } from '../components/ConnectionsSettings';
 import { Segmented } from '../components/ui/Segmented';
 import { backend } from '../lib/backend';
 import type { SystemInfo, ThemeSetting } from '../lib/types';
@@ -44,6 +45,10 @@ export function SettingsScreen() {
               ]}
             />
           </Row>
+        </Section>
+
+        <Section title="Models">
+          <ConnectionsSettings />
         </Section>
 
         <Section title="About">

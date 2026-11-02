@@ -1,5 +1,10 @@
 @import 'tailwindcss';
 
+/* Streamdown (markdown) builds its parts with Tailwind classes: scan them too. */
+@source '../../node_modules/streamdown/dist/*.js';
+@source '../../node_modules/@streamdown/code/dist/*.js';
+@source '../../node_modules/@streamdown/math/dist/*.js';
+
 /* Dark mode follows the data-theme attribute (set from Settings: system, light or dark). */
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
 
@@ -66,7 +71,32 @@
   --segment-thumb: #34312d;
 }
 
+/* The shadcn-style tokens Streamdown's code blocks and tables use, mapped onto Hearth's palette. */
+:root {
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--text-2);
+  --border: var(--line);
+  --input: var(--line);
+  --primary: var(--accent);
+  --primary-foreground: var(--on-accent);
+  --radius: 0.625rem;
+}
+
 @theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
   --color-bg: var(--bg);
   --color-sidebar: var(--sidebar);
   --color-surface: var(--surface);
@@ -172,6 +202,154 @@
 
 .titlebar[data-focused='false'] .caption button:not(:hover) {
   color: var(--text-3);
+}
+
+/* ── Messages ─────────────────────────────────────────────────────────────────────────────── */
+.hearth-markdown {
+  font-size: 15px;
+  line-height: 1.68;
+  color: var(--text);
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+
+.hearth-markdown code:not(pre code) {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  padding: 0.12em 0.36em;
+  border-radius: 5px;
+  background: var(--surface-2);
+}
+
+.hearth-markdown pre,
+.hearth-markdown pre code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.thinking-shimmer {
+  background: linear-gradient(90deg, var(--text-3) 0%, var(--text) 50%, var(--text-3) 100%);
+  background-size: 200% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 1.8s linear infinite;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.typing-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--text-3);
+  animation: typing 1.2s ease-in-out infinite;
+}
+
+.typing-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+/* ── Menus, popovers, dialogs (Radix) ─────────────────────────────────────────────────────── */
+.menu,
+.popover,
+.dialog {
+  z-index: 50;
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 12px;
+  box-shadow:
+    var(--elev-pop),
+    0 0 0 1px var(--line);
+}
+
+.menu {
+  padding: 4px;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  outline: none;
+  cursor: default;
+}
+
+.menu-item svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: var(--text-2);
+}
+
+.menu-item[data-highlighted] {
+  background: var(--surface-2);
+}
+
+.menu-danger,
+.menu-danger svg {
+  color: var(--danger);
+}
+
+.menu-label {
+  padding: 8px 10px 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.menu-note {
+  padding: 6px 10px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
+}
+
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(20, 18, 16, 0.32);
+}
+
+.dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 20px;
 }
 
 @media (prefers-reduced-motion: reduce) {

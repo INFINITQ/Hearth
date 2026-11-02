@@ -1,5 +1,7 @@
 //! Commands the UI can call. Each one is a thin wrapper over hearth-core.
 
+use std::sync::Arc;
+
 use hearth_core::settings::{Settings, SettingsStore};
 use serde::Serialize;
 use serde_json::Value;
@@ -42,7 +44,7 @@ pub async fn system_info(data_dir: State<'_, DataDir>) -> Result<SystemInfo> {
 }
 
 #[tauri::command]
-pub async fn settings_get(settings: State<'_, SettingsStore>) -> Result<Settings> {
+pub async fn settings_get(settings: State<'_, Arc<SettingsStore>>) -> Result<Settings> {
     Ok(settings.get())
 }
 
@@ -50,7 +52,7 @@ pub async fn settings_get(settings: State<'_, SettingsStore>) -> Result<Settings
 #[tauri::command]
 pub async fn settings_set(
     app: AppHandle<Wry>,
-    settings: State<'_, SettingsStore>,
+    settings: State<'_, Arc<SettingsStore>>,
     patch: Value,
 ) -> Result<Settings> {
     let next = settings.update(&patch)?;

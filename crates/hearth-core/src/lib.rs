@@ -4,8 +4,10 @@
 //! (`cargo test -p hearth-core`). The Tauri shell in `apps/hearth/src-tauri` only wires these
 //! pieces to the window and the UI.
 
+pub mod chat;
 pub mod fsutil;
 pub mod llm;
+pub mod runs;
 pub mod settings;
 pub mod store;
 
