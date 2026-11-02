@@ -13,6 +13,7 @@ mod commands;
 mod error;
 mod guard;
 mod links;
+mod runtime_commands;
 mod theme;
 mod webview2;
 mod window;
@@ -23,6 +24,7 @@ use std::sync::Arc;
 use hearth_core::agent::Agent;
 use hearth_core::chat::{Chat, StoreResolver};
 use hearth_core::runs::RunManager;
+use hearth_core::runtime::Runtime;
 use hearth_core::settings::SettingsStore;
 use hearth_core::store::{ConnectionInput, Store, StoreError};
 use tauri::{Emitter, Manager};
@@ -85,11 +87,20 @@ fn main() {
             code_commands::session_revert,
             code_commands::session_undo,
             code_commands::shells_info,
+            runtime_commands::runtime_overview,
+            runtime_commands::models_rescan,
+            runtime_commands::model_load,
+            runtime_commands::model_unload,
+            runtime_commands::model_logs,
+            runtime_commands::runtime_telemetry,
+            runtime_commands::pick_llama_server,
+            runtime_commands::pick_model_folder,
         ])
         .setup(|app| {
             let data = data_dir(app.handle())?;
             std::fs::create_dir_all(&data)?;
             let settings = Arc::new(SettingsStore::open(data.join("settings.json")));
+            apply_test_settings(&settings);
             let store = Arc::new(open_store(&data.join("hearth.db"))?);
             seed_test_connection(&store, &settings);
 
@@ -98,7 +109,18 @@ fn main() {
             runs.on_change(move |info| {
                 let _ = handle.emit_to(window::MAIN, chat_commands::RUN_STATE_EVENT, info);
             });
-            let resolver = Arc::new(StoreResolver::new(store.clone()));
+            let runtime = Runtime::new(settings.clone(), data.join("logs"));
+            let handle = app.handle().clone();
+            let watched = runtime.clone();
+            runtime.on_change(move || {
+                let _ = handle.emit_to(
+                    window::MAIN,
+                    runtime_commands::RUNTIME_EVENT,
+                    watched.status(),
+                );
+            });
+            let resolver = Arc::new(StoreResolver::with_runtime(store.clone(), runtime.clone()));
+            app.manage(runtime);
             let chat = Chat::new(
                 store.clone(),
                 runs.clone(),
@@ -145,6 +167,21 @@ fn open_store(path: &Path) -> std::result::Result<Store, String> {
             })
         }
         Err(other) => Err(other.to_string()),
+    }
+}
+
+/// Test runs started with `HEARTH_TEST_SETTINGS` (a JSON merge patch) get those settings.
+fn apply_test_settings(settings: &SettingsStore) {
+    let Some(patch) = guard::test_value("HEARTH_TEST_SETTINGS") else {
+        return;
+    };
+    match serde_json::from_str::<serde_json::Value>(&patch) {
+        Ok(patch) => {
+            if let Err(err) = settings.update(&patch) {
+                eprintln!("HEARTH_TEST_SETTINGS was rejected: {err}");
+            }
+        }
+        Err(err) => eprintln!("HEARTH_TEST_SETTINGS isn't JSON: {err}"),
     }
 }
 

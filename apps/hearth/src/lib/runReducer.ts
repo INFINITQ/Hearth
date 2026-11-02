@@ -24,6 +24,8 @@ export type LiveRun = {
   output: Record<string, string>;
   /** Messages the user sent while it worked, waiting to join the conversation. */
   queued: string[];
+  /** The model being loaded before the reply can start (Hearth's own llama-server). */
+  loading: string | null;
 };
 
 /** Live command output kept per call. */
@@ -54,6 +56,7 @@ export function newRun(sessionId: string, runId: string | null = null): LiveRun 
     question: null,
     output: {},
     queued: [],
+    loading: null,
   };
 }
 
@@ -135,10 +138,16 @@ export function applyRunEvent(state: TranscriptState, event: RunEnvelope): Trans
         },
       };
     }
+    case 'model_loading':
+      return { ...state, run: { ...live, loading: event.model } };
     case 'prompt_progress':
       return {
         ...state,
-        run: { ...live, progress: { processed: event.processed, total: event.total } },
+        run: {
+          ...live,
+          loading: null,
+          progress: { processed: event.processed, total: event.total },
+        },
       };
     case 'message_started':
       return {
@@ -164,7 +173,7 @@ export function applyRunEvent(state: TranscriptState, event: RunEnvelope): Trans
           ...m,
           reasoning: (m.reasoning ?? '') + event.text,
         })),
-        run: { ...live, reasoning: live.reasoning + event.text },
+        run: { ...live, reasoning: live.reasoning + event.text, loading: null },
       };
     case 'content_delta':
       return {
@@ -173,7 +182,7 @@ export function applyRunEvent(state: TranscriptState, event: RunEnvelope): Trans
           ...m,
           content: m.content + event.text,
         })),
-        run: { ...live, content: live.content + event.text, progress: null },
+        run: { ...live, content: live.content + event.text, progress: null, loading: null },
       };
     case 'message_finished':
       return {
@@ -187,7 +196,7 @@ export function applyRunEvent(state: TranscriptState, event: RunEnvelope): Trans
           content: event.content ?? m.content,
           toolCalls: event.toolCalls?.length ? event.toolCalls : (m.toolCalls ?? null),
         })),
-        run: { ...live, messageId: null, writing: null, progress: null },
+        run: { ...live, messageId: null, writing: null, progress: null, loading: null },
       };
     case 'tool_call_progress':
       return { ...state, run: { ...live, writing: { name: event.name, chars: event.chars } } };

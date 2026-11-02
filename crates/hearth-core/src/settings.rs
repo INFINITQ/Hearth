@@ -23,8 +23,8 @@ pub enum Theme {
     Dark,
 }
 
-/// Which model to use. For now a model on a connection (a server Hearth talks to); Hearth's own
-/// managed llama-server presets join in M5.
+/// Which model to use: a model file Hearth runs itself with llama-server, or a model on a
+/// connection (a server Hearth talks to).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -32,10 +32,68 @@ pub enum Theme {
     rename_all_fields = "camelCase"
 )]
 pub enum ModelRef {
+    Local {
+        model_id: String,
+    },
     Connection {
         connection_id: String,
         model: String,
     },
+}
+
+/// How Hearth runs one model file (all optional: Hearth picks sensible defaults).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ModelPreset {
+    /// Context length in tokens.
+    pub context: Option<u32>,
+    /// KV cache type: `f16`, `q8_0` or `q4_0`.
+    pub kv_cache: Option<String>,
+    /// Layers on the GPU (`None`: llama.cpp fits the model to free memory).
+    pub gpu_layers: Option<i32>,
+    /// MoE layers whose experts stay in system RAM.
+    pub cpu_moe: Option<u32>,
+    /// Load the vision projector when there is one.
+    pub vision: bool,
+    /// More llama-server arguments, as typed.
+    pub extra_args: String,
+}
+
+impl Default for ModelPreset {
+    fn default() -> Self {
+        Self {
+            context: None,
+            kv_cache: None,
+            gpu_layers: None,
+            cpu_moe: None,
+            vision: true,
+            extra_args: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RuntimeSettings {
+    /// llama-server.exe (`None`: found on PATH or in the usual folders).
+    pub llama_server_path: Option<String>,
+    /// Folders with GGUF models (LM Studio's folder is searched too).
+    pub model_folders: Vec<String>,
+    /// Models kept loaded at once; the least recently used is unloaded first.
+    pub max_loaded: u32,
+    /// Per-model settings, by model id.
+    pub presets: std::collections::BTreeMap<String, ModelPreset>,
+}
+
+impl Default for RuntimeSettings {
+    fn default() -> Self {
+        Self {
+            llama_server_path: None,
+            model_folders: Vec::new(),
+            max_loaded: 1,
+            presets: Default::default(),
+        }
+    }
 }
 
 /// The default model for each job (each chat or session can override it).
@@ -70,6 +128,7 @@ pub struct Settings {
     pub models: ModelRoles,
     pub chat: ChatSettings,
     pub code: CodeSettings,
+    pub runtime: RuntimeSettings,
 }
 
 #[derive(Debug, thiserror::Error)]

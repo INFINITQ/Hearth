@@ -10,6 +10,10 @@ publish.workspace = true
 name = "hearth-mock-llm"
 path = "src/bin/hearth-mock-llm.rs"
 
+[[bin]]
+name = "fake-llama-server"
+path = "src/bin/fake-llama-server.rs"
+
 [dependencies]
 axum = { workspace = true }
 tokio = { workspace = true }

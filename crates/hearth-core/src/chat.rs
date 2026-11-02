@@ -20,6 +20,7 @@ use crate::llm::{
     ToolCall, Usage,
 };
 use crate::runs::{Run, RunEnd, RunEvent, RunManager, RunSink};
+use crate::runtime::Runtime;
 use crate::settings::{ModelRef, Settings, SettingsStore};
 use crate::store::{
     Message, MessageFinish, MessageRole, MessageStatus, Mode, NewMessage, Session, SessionPatch,
@@ -34,10 +35,19 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = "You are Hearth, a helpful assistant run
 Answer clearly and directly. Use Markdown when it helps: short headings and lists for structure, fenced code blocks \
 with a language tag for code, and LaTeX between $…$ or $$…$$ for math. If you don't know something, say so.";
 
-/// A model ready to use: a client for its server and the model name to ask for.
+/// Where a model's server is.
+#[derive(Clone)]
+pub enum Endpoint {
+    /// A server Hearth talks to (a connection).
+    Remote(LlmClient),
+    /// A model file Hearth runs itself: its llama-server starts when first needed.
+    Local { runtime: Runtime, model_id: String },
+}
+
+/// A model ready to use: where its server is and the model name to ask for.
 #[derive(Clone)]
 pub struct ResolvedModel {
-    pub client: LlmClient,
+    pub endpoint: Endpoint,
     pub model: String,
     /// Shown in the UI and saved with each reply.
     pub label: String,
@@ -45,13 +55,42 @@ pub struct ResolvedModel {
     pub llama_extensions: bool,
 }
 
+impl ResolvedModel {
+    /// A client for the model's server, starting it first (and saying so) when it's a local
+    /// model that isn't loaded.
+    pub async fn connect(&self, run: &Run) -> Result<LlmClient, LlmError> {
+        match &self.endpoint {
+            Endpoint::Remote(client) => Ok(client.clone()),
+            Endpoint::Local { runtime, model_id } => {
+                if !runtime.is_ready(model_id) {
+                    run.emit(RunEvent::ModelLoading {
+                        model: self.label.clone(),
+                    });
+                }
+                runtime
+                    .ensure(model_id, &run.cancel)
+                    .await
+                    .map_err(|message| {
+                        if run.cancel.is_cancelled() {
+                            LlmError::Cancelled
+                        } else {
+                            LlmError::Runtime(message)
+                        }
+                    })
+            }
+        }
+    }
+}
+
 pub trait ModelResolver: Send + Sync {
     fn resolve(&self, model: &ModelRef) -> Result<ResolvedModel, String>;
 }
 
-/// Resolves models on saved connections, reusing one HTTP client per connection.
+/// Resolves local models through the runtime, and models on saved connections (one HTTP
+/// client per connection).
 pub struct StoreResolver {
     store: Arc<Store>,
+    runtime: Option<Runtime>,
     clients: Mutex<HashMap<String, (String, LlmClient)>>,
 }
 
@@ -59,7 +98,15 @@ impl StoreResolver {
     pub fn new(store: Arc<Store>) -> Self {
         Self {
             store,
+            runtime: None,
             clients: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn with_runtime(store: Arc<Store>, runtime: Runtime) -> Self {
+        Self {
+            runtime: Some(runtime),
+            ..Self::new(store)
         }
     }
 }
@@ -67,6 +114,24 @@ impl StoreResolver {
 impl ModelResolver for StoreResolver {
     fn resolve(&self, model_ref: &ModelRef) -> Result<ResolvedModel, String> {
         match model_ref {
+            ModelRef::Local { model_id } => {
+                let runtime = self
+                    .runtime
+                    .clone()
+                    .ok_or("Local models aren't available here.")?;
+                let model = runtime.model(model_id).ok_or(
+                    "That model file isn't in the model folders any more. Choose another model.",
+                )?;
+                Ok(ResolvedModel {
+                    endpoint: Endpoint::Local {
+                        runtime,
+                        model_id: model_id.clone(),
+                    },
+                    model: model_id.clone(),
+                    label: model.name.clone(),
+                    llama_extensions: true,
+                })
+            }
             ModelRef::Connection {
                 connection_id,
                 model,
@@ -91,7 +156,7 @@ impl ModelResolver for StoreResolver {
                     }
                 };
                 Ok(ResolvedModel {
-                    client,
+                    endpoint: Endpoint::Remote(client),
                     model: model.clone(),
                     label: model.clone(),
                     llama_extensions: connection.llama_extensions,
@@ -466,7 +531,14 @@ pub(crate) async fn stream_reply(
     request: &ChatRequest,
 ) -> Streamed {
     let mut out = Streamed::default();
-    let mut stream = match model.client.stream_chat(request, run.cancel.clone()).await {
+    let client = match model.connect(run).await {
+        Ok(client) => client,
+        Err(err) => {
+            out.error = Some(err);
+            return out;
+        }
+    };
+    let mut stream = match client.stream_chat(request, run.cancel.clone()).await {
         Ok(stream) => stream,
         Err(err) => {
             out.error = Some(err);

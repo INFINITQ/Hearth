@@ -76,6 +76,23 @@ without a tool call (or a guard stops it).
 Projects (folders) are stored in `hearth.db`. Opening a folder for the first time asks whether
 its contents are trusted; untrusted projects don't get their AGENTS.md read.
 
+## The model runtime (`hearth-core/src/runtime/`)
+
+Hearth runs local models itself with llama.cpp's `llama-server`, one process per loaded model
+([ADR 0002](adr/0002-one-llama-server-per-model.md)).
+
+- **Finding things:** `llama.rs` finds llama-server (the chosen path, PATH, or the usual folders)
+  and probes `--version`, `--list-devices` and `--help`. `scan.rs` reads GGUF headers
+  (`gguf.rs`) in the model folders and LM Studio's, groups split files, and pairs vision
+  projectors.
+- **Running:** `manager.rs` starts a server on a free 127.0.0.1 port with a random API key, in
+  its own Job Object, passing only flags the build knows. A watcher polls `/health` until the
+  model is ready and notices if the server stops. When the limit (one by default) is reached,
+  the least recently used model is unloaded first. Failures are explained from the log (out of
+  memory, a missing DLL, an unknown argument, an old llama.cpp).
+- **Using a model:** a `local` model reference resolves to `Endpoint::Local`; the first request
+  loads the server (the run shows "Loading <model>…") and later ones reuse it.
+
 ## Window
 
 The window is frameless and has a custom title bar. Windows 11 Snap Layouts work through a native

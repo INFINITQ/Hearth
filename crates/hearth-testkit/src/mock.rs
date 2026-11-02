@@ -239,6 +239,15 @@ struct Shared {
     requests: Mutex<Vec<Value>>,
     released: Mutex<HashSet<String>>,
     disconnects: AtomicUsize,
+    /// Answer like llama-server while it loads a model (503 everywhere).
+    loading: std::sync::atomic::AtomicBool,
+}
+
+async fn health(State(shared): State<Arc<Shared>>) -> Response {
+    if shared.loading.load(std::sync::atomic::Ordering::SeqCst) {
+        return error_response(StatusCode::SERVICE_UNAVAILABLE, "Loading model");
+    }
+    Json(json!({ "status": "ok" })).into_response()
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -271,12 +280,13 @@ impl MockServer {
             requests: Mutex::new(Vec::new()),
             released: Mutex::new(HashSet::new()),
             disconnects: AtomicUsize::new(0),
+            loading: std::sync::atomic::AtomicBool::new(false),
         });
         let app = Router::new()
             .route("/v1/chat/completions", post(chat))
             .route("/v1/models", get(models))
             .route("/props", get(props))
-            .route("/health", get(|| async { Json(json!({ "status": "ok" })) }))
+            .route("/health", get(health))
             .route("/tokenize", post(tokenize))
             .route("/__mock/script", post(set_script))
             .route("/__mock/release/{hold}", post(release))
@@ -299,6 +309,13 @@ impl MockServer {
             shared,
             shutdown: Some(tx),
         })
+    }
+
+    /// While loading, `/health` answers 503 like llama-server's does.
+    pub fn set_loading(&self, loading: bool) {
+        self.shared
+            .loading
+            .store(loading, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// The OpenAI-compatible API base (`…/v1`).

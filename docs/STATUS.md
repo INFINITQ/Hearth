@@ -65,10 +65,34 @@ Where the build stands (plan: README "Status"; engineering details: build-notes.
     - Vitest: 20.
     - Playwright E2E: 26.
 
-## Next: M5, the managed llama-server runtime and the Models page
+- **M5**: the managed llama-server runtime and the Models page.
+  - **Backend** (`hearth-core/src/runtime/`):
+    - `gguf.rs`: GGUF header reader (architecture, name, size label, quantization, context,
+      layers, experts, chat template → tools/thinking, mmproj, splits), vocabulary skipped.
+    - `scan.rs`: model folders (plus LM Studio's), split files grouped, mmproj paired (F16
+      first), quantization from the file name, stable ids.
+    - `llama.rs`: find llama-server (setting, PATH, usual folders); probe `--version`,
+      `--list-devices`, `--help`; a missing CUDA DLL and CPU-only builds explained.
+    - `manager.rs`: one llama-server per loaded model (free port, random API key, Job Object,
+      only known flags, presets, `--cache-ram 2048` for big models); a watcher polls `/health`
+      and notices crashes; least recently used unloaded first; plain-language errors.
+    - `telemetry.rs`: VRAM (nvidia-smi) and RAM.
+    - `ModelRef::Local`: a chat or task with a local model loads it first (`model_loading`).
+  - **Testkit:** `fake-llama-server.exe` (probes, flags, 503 while loading, out of memory,
+    crashes, argv file).
+  - **UI:** the Models page (llama.cpp card or setup guide, folders, models with roles,
+    Load/Unload, status, per-model settings, errors with the log, VRAM/RAM meters), local models
+    in the model picker and in Settings, "Loading <model>…" in transcripts.
+  - **Fixed:** settings updates now merge deeply (a shallow optimistic merge dropped nested
+    settings).
+  - **Tests (all green):**
+    - Rust: 102 core unit, 15 agent, 8 chat, 11 client, 1 runtime integration, 4 app.
+    - Vitest: 22.
+    - Playwright E2E: 31.
 
-- Find llama-server (PATH, a chosen path), check it (`--version`, `--list-devices`).
-- Read GGUF headers; scan model folders (and LM Studio's); pair mmproj files.
-- Presets per model; start, health-check, swap and stop llama-server in a Job Object; logs and
-  plain-language errors; the fake llama-server in the testkit.
-- The Models page: found models, roles, per-model settings, load and unload, status.
+## Next: M6, context management
+
+- Usage from llama-server against the model's context; a context meter in coding sessions.
+- Near 80%, older turns are summarized by the same model (a `summary` message in the tree);
+  the full history stays in the database.
+- Tool outputs capped further when the context is tight.

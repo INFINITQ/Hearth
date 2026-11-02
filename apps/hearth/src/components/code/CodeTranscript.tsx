@@ -245,7 +245,9 @@ function AgentStep({
 function LiveStatus({ run, messages }: { run: LiveRun | null; messages: Message[] }) {
   if (!run || run.permission || run.question || run.tool) return null;
   let text = 'Thinking…';
-  if (run.writing) {
+  if (run.loading) {
+    text = `Loading ${run.loading}… the first reply can take a minute.`;
+  } else if (run.writing) {
     const size =
       run.writing.chars >= 1000 ? `${(run.writing.chars / 1000).toFixed(1)}k` : run.writing.chars;
     text = `Writing ${run.writing.name ?? 'a tool call'} · ${size} characters`;

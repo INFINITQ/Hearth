@@ -9,6 +9,7 @@ import { ModelsScreen } from './screens/ModelsScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { useApp } from './stores/app';
 import { useChat } from './stores/chat';
+import { useModels } from './stores/models';
 
 export function App() {
   const screen = useApp((s) => s.screen);
@@ -58,9 +59,12 @@ function useConversations() {
       .then((runs) => runs.forEach((run) => useChat.getState().setRunState(run)));
     const stopSessions = backend().onSessionsChanged(() => void useChat.getState().loadLists());
     const stopRuns = backend().onRunState((info) => useChat.getState().setRunState(info));
+    const stopRuntime = backend().onRuntime((status) => useModels.getState().setStatus(status));
+    void useModels.getState().load();
     return () => {
       stopSessions();
       stopRuns();
+      stopRuntime();
     };
   }, []);
 }

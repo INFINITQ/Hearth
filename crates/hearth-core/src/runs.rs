@@ -60,6 +60,10 @@ pub enum RunEvent {
         user_message_id: Option<String>,
         model: String,
     },
+    /// The model's llama-server is starting (loading a model can take a minute).
+    ModelLoading {
+        model: String,
+    },
     /// llama.cpp reading the prompt before it starts answering.
     PromptProgress {
         processed: u64,

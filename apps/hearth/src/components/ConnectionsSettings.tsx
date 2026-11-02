@@ -16,7 +16,14 @@ export function ConnectionsSettings() {
   const reload = async () => {
     const list = await backend().connectionsList();
     setConnections(list);
-    const found: Choice[] = [];
+    const local = await backend()
+      .runtimeOverview(false)
+      .then((overview) => overview.models)
+      .catch(() => []);
+    const found: Choice[] = local.map((model) => ({
+      label: `${model.name}${model.quant ? ` · ${model.quant}` : ''} · this PC`,
+      ref: { kind: 'local', modelId: model.id },
+    }));
     await Promise.all(
       list.map(async (connection) => {
         const models = await backend()
@@ -114,29 +121,38 @@ export function ConnectionsSettings() {
   );
 }
 
+/** One string per model reference, for `<select>` values. */
+function refKey(ref: ModelRef): string {
+  return ref.kind === 'local'
+    ? `local\u0000${ref.modelId}`
+    : `connection\u0000${ref.connectionId}\u0000${ref.model}`;
+}
+
 function DefaultModel({ mode, label, choices }: { mode: Mode; label: string; choices: Choice[] }) {
   const current = useApp((s) => s.settings.models[mode]);
-  const value = current ? `${current.connectionId}\u0000${current.model}` : '';
+  const value = current ? refKey(current) : '';
+  const known = choices.some((c) => refKey(c.ref) === value);
   return (
     <div className="flex items-center gap-6 px-5 py-3.5">
       <p className="min-w-0 flex-1 text-[14px] font-medium">{label}</p>
       <select
         aria-label={label}
-        value={value}
+        value={known ? value : ''}
         onChange={(e) => {
-          const choice = choices.find(
-            (c) => `${c.ref.connectionId}\u0000${c.ref.model}` === e.target.value,
-          );
+          const choice = choices.find((c) => refKey(c.ref) === e.target.value);
           void useApp.getState().updateSettings({ models: { [mode]: choice?.ref ?? null } });
         }}
-        className="h-8 max-w-[280px] rounded-control bg-surface-2 px-2.5 text-[13px] outline-none ring-1 ring-line focus:ring-accent"
+        className="h-8 max-w-[300px] rounded-control bg-surface-2 px-2.5 text-[13px] outline-none ring-1 ring-line focus:ring-accent"
       >
-        <option value="">{current ? current.model : 'Choose…'}</option>
+        <option value="">
+          {current && !known
+            ? current.kind === 'local'
+              ? 'A model on this PC'
+              : current.model
+            : 'Choose…'}
+        </option>
         {choices.map((choice) => (
-          <option
-            key={`${choice.ref.connectionId}-${choice.ref.model}`}
-            value={`${choice.ref.connectionId}\u0000${choice.ref.model}`}
-          >
+          <option key={refKey(choice.ref)} value={refKey(choice.ref)}>
             {choice.label}
           </option>
         ))}

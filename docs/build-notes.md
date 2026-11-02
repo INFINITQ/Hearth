@@ -288,15 +288,15 @@ full_blob, model_label, finish_reason, status streaming|complete|interrupted|err
   `big_output`; `--crash-after N`.
 - **E2E hooks** (debug builds only):
 
-  | Variable                                                                     | Effect                                                                                                                                  |
-  | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-  | `HEARTH_BACKGROUND=1`                                                        | window never shown or focused                                                                                                           |
-  | `HEARTH_TEST_DATA_DIR`                                                       | data in that folder; its own instance; sealed: no discovery of the user's llama-server or models, outbound HTTP to loopback only        |
-  | `HEARTH_TEST_SEED=<json>`                                                    | applied on first start: settings, connections, roles, `llamaServerPath`, model folders, search provider, MCP servers, pre-made sessions |
-  | `HEARTH_TEST_LLM_URL`                                                        | creates a "Mock" connection and sets it as both default models                                                                          |
-  | `HEARTH_TEST_PICK_FOLDER`, `HEARTH_TEST_PICK_FILES`, `HEARTH_TEST_SAVE_PATH` | answers the native dialogs                                                                                                              |
-  | `HEARTH_TEST_LINKS=<file>`                                                   | links and reveal requests are written to the file instead of opened                                                                     |
-  | `HEARTH_TEST_NOW`, `HEARTH_TEST_FAKE_SYSTEM`, `HEARTH_TEST_REDUCED_MOTION`   | deterministic screenshots                                                                                                               |
+  | Variable                                                                    | Effect                                                                                                                           |
+  | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+  | `HEARTH_BACKGROUND=1`                                                       | window never shown or focused                                                                                                    |
+  | `HEARTH_TEST_DATA_DIR`                                                      | data in that folder; its own instance; sealed: no discovery of the user's llama-server or models, outbound HTTP to loopback only |
+  | `HEARTH_TEST_SETTINGS=<json>`                                               | a settings merge patch applied at start (e.g. `runtime.llamaServerPath`, `runtime.modelFolders`)                                 |
+  | `HEARTH_TEST_LLM_URL`                                                       | creates a "Mock" connection and sets it as both default models                                                                   |
+  | `HEARTH_TEST_PICK_FOLDER`, `HEARTH_TEST_PICK_FILE`, `HEARTH_TEST_SAVE_PATH` | answers the native dialogs (folder, llama-server.exe, save)                                                                      |
+  | `HEARTH_TEST_LINKS=<file>`                                                  | links and reveal requests are written to the file instead of opened                                                              |
+  | `HEARTH_TEST_NOW`, `HEARTH_TEST_FAKE_SYSTEM`, `HEARTH_TEST_REDUCED_MOTION`  | deterministic screenshots                                                                                                        |
 
 - **`pnpm verify` order:**
   1. `cargo fmt --check`

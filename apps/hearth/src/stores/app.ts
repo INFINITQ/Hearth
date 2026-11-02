@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { type SettingsPatch, backend } from '../lib/backend';
+import { mergePatch } from '../lib/mergePatch';
 import type { Settings } from '../lib/types';
 
 export type Mode = 'chat' | 'code';
@@ -23,12 +24,6 @@ type AppState = {
 
 const boot = backend().boot();
 
-function withoutNulls(patch: SettingsPatch): Partial<Settings> {
-  return Object.fromEntries(
-    Object.entries(patch).filter(([, value]) => value !== null),
-  ) as Partial<Settings>;
-}
-
 export const useApp = create<AppState>()((set, get) => ({
   screen: 'chat',
   mode: 'chat',
@@ -44,7 +39,7 @@ export const useApp = create<AppState>()((set, get) => ({
   updateSettings: async (patch) => {
     // Optimistic: the UI reacts at once; Rust validates and saves, and its answer wins.
     const before = get().settings;
-    set({ settings: { ...before, ...withoutNulls(patch) } });
+    set({ settings: mergePatch(before, patch) });
     try {
       set({ settings: await backend().settingsSet(patch) });
     } catch (err) {

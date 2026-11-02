@@ -2,6 +2,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { fakeChat } from './fakeChat';
+import { mergePatch } from './mergePatch';
 import {
   type Boot,
   type ChatAction,
@@ -10,6 +11,9 @@ import {
   DEFAULT_SETTINGS,
   type FileChange,
   type Mode,
+  type ModelStatus,
+  type RuntimeOverview,
+  type Telemetry,
   type PermissionChoice,
   type PermissionMode,
   type Project,
@@ -92,6 +96,17 @@ export interface ChatBackend {
   /** Undoes the file changes of task `turn` and later ones; returns the files put back. */
   sessionUndo(sessionId: string, turn: number): Promise<string[]>;
   shellsInfo(): Promise<ShellsInfo>;
+
+  /** The Models page: llama-server, folders, models and their state (`refresh`: probe and rescan). */
+  runtimeOverview(refresh: boolean): Promise<RuntimeOverview>;
+  /** Loads a model now; resolves when it's ready, rejects with the reason it failed. */
+  modelLoad(modelId: string): Promise<void>;
+  modelUnload(modelId: string): Promise<void>;
+  modelLogs(modelId: string): Promise<string[]>;
+  runtimeTelemetry(): Promise<Telemetry>;
+  pickLlamaServer(): Promise<string | null>;
+  pickModelFolder(): Promise<string | null>;
+  onRuntime(listener: (status: ModelStatus[]) => void): () => void;
 }
 
 /**
@@ -194,6 +209,14 @@ export function tauriBackend(): Backend {
     sessionRevert: (sessionId, path) => invoke('session_revert', { sessionId, path }),
     sessionUndo: (sessionId, turn) => invoke('session_undo', { sessionId, turn }),
     shellsInfo: () => invoke('shells_info'),
+    runtimeOverview: (refresh) => invoke('runtime_overview', { refresh }),
+    modelLoad: (modelId) => invoke('model_load', { modelId }),
+    modelUnload: (modelId) => invoke('model_unload', { modelId }),
+    modelLogs: (modelId) => invoke('model_logs', { modelId }),
+    runtimeTelemetry: () => invoke('runtime_telemetry'),
+    pickLlamaServer: () => invoke('pick_llama_server'),
+    pickModelFolder: () => invoke('pick_model_folder'),
+    onRuntime: (listener) => subscribe<ModelStatus[]>('hearth://runtime', listener),
 
     window: {
       minimize: () => void win.minimize(),
@@ -224,13 +247,9 @@ export function fakeBackend(initial: Partial<Settings> = {}): Backend {
     }),
     settingsGet: async () => settings,
     settingsSet: async (patch) => {
-      const next: Record<string, unknown> = { ...settings };
+      const next: Record<string, unknown> = mergePatch(settings, patch);
       for (const [key, value] of Object.entries(patch)) {
-        const fallback = DEFAULT_SETTINGS[key as keyof Settings];
-        if (value === null) next[key] = fallback;
-        else if (typeof value === 'object' && !Array.isArray(value) && typeof fallback === 'object')
-          next[key] = { ...(next[key] as object), ...value };
-        else next[key] = value;
+        if (value === null) next[key] = DEFAULT_SETTINGS[key as keyof Settings];
       }
       settings = next as Settings;
       listeners.forEach((listener) => listener(settings));

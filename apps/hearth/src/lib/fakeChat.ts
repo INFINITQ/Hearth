@@ -3,7 +3,9 @@
 
 import type { ChatBackend } from './backend';
 import type {
+  LocalModel,
   Message,
+  ModelStatus,
   PermissionChoice,
   PermissionMode,
   Project,
@@ -42,8 +44,69 @@ fn mean(values: &[f64]) -> f64 {
 
 The variance is $\\sigma^2 = \\frac{1}{n}\\sum_i (x_i - \\mu)^2$.`;
 
+const GB = 1024 ** 3;
+
+const FAKE_MODELS: LocalModel[] = [
+  {
+    id: 'm-qwen',
+    path: 'D:\\Models\\qwen\\Qwen3.6-35B-A3B-UD-IQ4_XS.gguf',
+    fileName: 'Qwen3.6-35B-A3B-UD-IQ4_XS.gguf',
+    name: 'Qwen3.6 35B A3B',
+    quant: 'UD-IQ4_XS',
+    sizeBytes: 17.7 * GB,
+    parts: 1,
+    missingParts: 0,
+    architecture: 'qwen3moe',
+    sizeLabel: '35B-A3B',
+    contextLength: 262_144,
+    layers: 48,
+    experts: 128,
+    tools: true,
+    thinking: true,
+    mmproj: 'D:\\Models\\qwen\\mmproj-F16.gguf',
+  },
+  {
+    id: 'm-gemma',
+    path: 'D:\\Models\\gemma\\gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf',
+    fileName: 'gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf',
+    name: 'Gemma 4 26B A4B',
+    quant: 'UD-Q4_K_XL',
+    sizeBytes: 17 * GB,
+    parts: 1,
+    missingParts: 0,
+    architecture: 'gemma4',
+    sizeLabel: '26B-A4B',
+    contextLength: 131_072,
+    layers: 30,
+    experts: 128,
+    tools: true,
+    thinking: true,
+    mmproj: null,
+  },
+  {
+    id: 'm-oss',
+    path: 'D:\\Models\\gpt-oss\\gpt-oss-20b-MXFP4.gguf',
+    fileName: 'gpt-oss-20b-MXFP4.gguf',
+    name: 'gpt-oss-20b',
+    quant: 'MXFP4',
+    sizeBytes: 12.1 * GB,
+    parts: 1,
+    missingParts: 0,
+    architecture: 'gpt-oss',
+    sizeLabel: '20B',
+    contextLength: 131_072,
+    layers: 24,
+    experts: 32,
+    tools: true,
+    thinking: true,
+    mmproj: null,
+  },
+];
+
 export function fakeChat(): ChatBackend {
   const sessions = new Map<string, Session>();
+  const loaded = new Map<string, ModelStatus>();
+  const runtimeListeners = new Set<(status: ModelStatus[]) => void>();
   const messages = new Map<string, Message>();
   const runs = new Map<string, { sessionId: string; stop: () => void }>();
   const projects = new Map<string, Project>();
@@ -387,6 +450,47 @@ export function fakeChat(): ChatBackend {
       gitBash: 'C:\\Program Files\\Git\\bin\\bash.exe',
       powershell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     }),
+
+    runtimeOverview: async () => ({
+      server: {
+        path: 'C:\\Tools\\llama.cpp\\llama-server.exe',
+        version: 'build 7960 (3f2a1bc)',
+        devices: [
+          { id: 'CUDA0', name: 'NVIDIA GeForce RTX 5070', totalMib: 12227, freeMib: 11043 },
+        ],
+        warnings: [],
+      },
+      serverError: null,
+      folders: [{ path: 'D:\\Models', exists: true, automatic: false }],
+      models: FAKE_MODELS,
+      status: [...loaded.values()],
+    }),
+    modelLoad: async (modelId) => {
+      loaded.set(modelId, { modelId, state: 'loading', sinceMs: Date.now(), port: 0, command: '' });
+      runtimeListeners.forEach((l) => l([...loaded.values()]));
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      for (const other of loaded.keys()) if (other !== modelId) loaded.delete(other);
+      loaded.set(modelId, { modelId, state: 'ready', sinceMs: Date.now(), port: 0, command: '' });
+      runtimeListeners.forEach((l) => l([...loaded.values()]));
+    },
+    modelUnload: async (modelId) => {
+      loaded.delete(modelId);
+      runtimeListeners.forEach((l) => l([...loaded.values()]));
+    },
+    modelLogs: async () => ['main: server is listening on http://127.0.0.1:52011'],
+    runtimeTelemetry: async () => ({
+      gpus: [
+        { name: 'NVIDIA GeForce RTX 5070', totalMib: 12227, usedMib: loaded.size ? 9800 : 900 },
+      ],
+      ramTotalMib: 32_607,
+      ramUsedMib: loaded.size ? 22_400 : 9_100,
+    }),
+    pickLlamaServer: async () => 'C:\\Tools\\llama.cpp\\llama-server.exe',
+    pickModelFolder: async () => 'D:\\Models',
+    onRuntime: (listener) => {
+      runtimeListeners.add(listener);
+      return () => runtimeListeners.delete(listener);
+    },
   };
 
   /** A scripted agent task: read a file, plan, then edit it (asking first in Ask mode). */

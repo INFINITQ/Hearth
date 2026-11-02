@@ -71,7 +71,7 @@ pub fn test_data_dir() -> Option<PathBuf> {
 }
 
 /// A debug-build test value from the environment (always `None` in release builds).
-fn test_value(name: &str) -> Option<String> {
+pub fn test_value(name: &str) -> Option<String> {
     if !cfg!(debug_assertions) {
         return None;
     }

@@ -4,10 +4,21 @@
 export type ThemeSetting = 'system' | 'light' | 'dark';
 export type Mode = 'chat' | 'code';
 
-/** Which model to use: a model on a saved connection (managed llama-server presets join later). */
-export type ModelRef = { kind: 'connection'; connectionId: string; model: string };
+/** Which model to use: a model file Hearth runs itself, or a model on a saved connection. */
+export type ModelRef =
+  { kind: 'local'; modelId: string } | { kind: 'connection'; connectionId: string; model: string };
 
 export type ShellKind = 'git_bash' | 'powershell';
+
+/** How Hearth runs one model file (unset: Hearth's defaults). */
+export type ModelPreset = {
+  context?: number | null;
+  kvCache?: string | null;
+  gpuLayers?: number | null;
+  cpuMoe?: number | null;
+  vision?: boolean;
+  extraArgs?: string;
+};
 
 export type Settings = {
   theme: ThemeSetting;
@@ -16,6 +27,62 @@ export type Settings = {
   chat: { systemPrompt: string | null };
   /** The shell the agent runs commands in. */
   code: { shell: ShellKind };
+  runtime: {
+    llamaServerPath: string | null;
+    modelFolders: string[];
+    maxLoaded: number;
+    presets: Record<string, ModelPreset>;
+  };
+};
+
+/** A GGUF model found in the model folders. */
+export type LocalModel = {
+  id: string;
+  path: string;
+  fileName: string;
+  name: string;
+  quant: string | null;
+  sizeBytes: number;
+  parts: number;
+  missingParts: number;
+  architecture: string;
+  sizeLabel: string | null;
+  contextLength: number | null;
+  layers: number | null;
+  experts: number | null;
+  tools: boolean;
+  thinking: boolean;
+  mmproj: string | null;
+};
+
+export type ModelState =
+  | { state: 'loading'; sinceMs: number }
+  | { state: 'ready'; sinceMs: number }
+  | { state: 'failed'; error: string };
+
+export type ModelStatus = ModelState & { modelId: string; port: number; command: string };
+
+export type Device = { id: string; name: string; totalMib: number; freeMib: number };
+
+export type ServerInfo = {
+  path: string;
+  version: string | null;
+  devices: Device[];
+  warnings: string[];
+};
+
+export type RuntimeOverview = {
+  server: ServerInfo | null;
+  serverError: string | null;
+  folders: { path: string; exists: boolean; automatic: boolean }[];
+  models: LocalModel[];
+  status: ModelStatus[];
+};
+
+export type Telemetry = {
+  gpus: { name: string; totalMib: number; usedMib: number }[];
+  ramTotalMib: number;
+  ramUsedMib: number;
 };
 
 /** What Rust hands the page before it loads (window.__HEARTH_BOOT__). */
@@ -43,6 +110,7 @@ export const DEFAULT_SETTINGS: Settings = {
   models: { chat: null, code: null },
   chat: { systemPrompt: null },
   code: { shell: 'git_bash' },
+  runtime: { llamaServerPath: null, modelFolders: [], maxLoaded: 1, presets: {} },
 };
 
 export type ChatParams = {
@@ -227,6 +295,7 @@ export type RunEvent =
       reasoning: string;
     }
   | { type: 'started'; sessionId: string; userMessageId: string | null; model: string }
+  | { type: 'model_loading'; model: string }
   | { type: 'prompt_progress'; processed: number; total: number; cached: number }
   | { type: 'message_started'; messageId: string; parentId: string | null }
   | { type: 'reasoning_delta'; messageId: string; text: string }

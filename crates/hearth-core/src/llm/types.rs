@@ -286,6 +286,9 @@ pub enum LlmError {
     ConnectionLost,
     #[error("The model server sent something unexpected: {0}")]
     Protocol(String),
+    /// Hearth couldn't start the model's llama-server.
+    #[error("{0}")]
+    Runtime(String),
     #[error("Stopped.")]
     Cancelled,
 }
@@ -301,6 +304,7 @@ impl LlmError {
             LlmError::Http { .. } => "http",
             LlmError::ConnectionLost => "connection_lost",
             LlmError::Protocol(_) => "protocol",
+            LlmError::Runtime(_) => "runtime",
             LlmError::Cancelled => "cancelled",
         }
     }

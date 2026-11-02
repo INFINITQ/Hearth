@@ -3,6 +3,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  LoaderCircle,
   Pencil,
   RotateCcw,
   TriangleAlert,
@@ -163,6 +164,7 @@ function AssistantMessage({
   last: boolean;
 }) {
   const busy = useChat((s) => s.run !== null);
+  const loadingModel = useChat((s) => (live ? s.run?.loading : null));
   const streaming = live && message.status === 'streaming';
   const reasoning = message.reasoning ?? '';
   const info = stats(message);
@@ -178,7 +180,9 @@ function AssistantMessage({
       {message.content ? (
         <Markdown text={message.content} streaming={streaming} />
       ) : (
-        streaming && !reasoning && <TypingDots />
+        streaming &&
+        !reasoning &&
+        (loadingModel ? <ModelLoadingLine model={loadingModel} /> : <TypingDots />)
       )}
       {message.status === 'error' && (
         <div className="mt-2 flex items-start gap-2 rounded-card bg-danger-soft px-3.5 py-2.5 text-[13.5px] text-danger">
@@ -209,6 +213,16 @@ function AssistantMessage({
         </div>
       )}
     </div>
+  );
+}
+
+/** Shown while Hearth starts the model's llama-server. */
+export function ModelLoadingLine({ model }: { model: string }) {
+  return (
+    <p className="flex items-center gap-2 text-[13px] text-text-2" aria-live="polite">
+      <LoaderCircle className="size-3.5 animate-spin text-accent" />
+      <span className="thinking-shimmer">Loading {model}… the first reply can take a minute.</span>
+    </p>
   );
 }
 
