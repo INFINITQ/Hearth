@@ -22,8 +22,22 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "fs", "process", "signal"] }
+tokio-util = "0.7"
+futures-util = "0.3"
+bytes = "1"
+async-stream = "0.3"
+# Windows' own TLS (SChannel) instead of rustls + aws-lc, which would need CMake and NASM.
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "charset", "http2", "system-proxy", "json", "stream", "gzip", "brotli"] }
+# Bundled SQLite (with FTS5), so every PC runs the same, known SQLite.
+rusqlite = { version = "0.41", features = ["bundled"] }
+uuid = { version = "1", features = ["v7"] }
+tracing = "0.1"
+axum = "0.8"
+pretty_assertions = "1"
 
 hearth-core = { path = "crates/hearth-core" }
+hearth-testkit = { path = "crates/hearth-testkit" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

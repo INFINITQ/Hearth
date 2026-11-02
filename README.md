@@ -21,8 +21,8 @@ In development. Milestones:
 |     | Milestone                                                   | State |
 | --- | ----------------------------------------------------------- | ----- |
 | M0  | Scaffold, window and title bar, design tokens, models guide | done  |
-| M1  | Core: SQLite store, LLM streaming client, mock model server | next  |
-| M2  | Chat end to end                                             |       |
+| M1  | Core: SQLite store, LLM streaming client, mock model server | done  |
+| M2  | Chat end to end                                             | next  |
 | M3  | Coding agent: file tools and permissions                    |       |
 | M4  | Coding agent: commands, undo, diff review, stop and steer   |       |
 | M5  | llama-server runtime manager and Models page                |       |
