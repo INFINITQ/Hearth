@@ -153,6 +153,17 @@ pub enum RunEvent {
     Steered {
         message: Box<Message>,
     },
+    /// The earlier conversation is being summarized to make room.
+    Compacting,
+    /// The summary, now standing in for the earlier messages.
+    Compacted {
+        message: Box<Message>,
+    },
+    /// How full the model's context window is after a reply.
+    Context {
+        used: u64,
+        limit: u64,
+    },
     /// Something the user should know that isn't an error (a pause, a cut-off reply).
     Notice {
         level: String,

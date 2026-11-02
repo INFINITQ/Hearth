@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, json};
 use tokio::time::Instant;
 
+use crate::context;
 use crate::llm::think::ThinkSplitter;
 use crate::llm::{
     Assembler, ChatMessage, ChatRequest, FinishReason, LlmClient, LlmError, Sampling, StreamEvent,
@@ -56,6 +57,22 @@ pub struct ResolvedModel {
 }
 
 impl ResolvedModel {
+    /// The model's context window, when it can be known: a local model's setting, or what a
+    /// llama.cpp server reports.
+    pub async fn window(&self, client: &LlmClient) -> Option<u64> {
+        match &self.endpoint {
+            Endpoint::Local { runtime, model_id } => runtime.context_window(model_id),
+            Endpoint::Remote(_) if self.llama_extensions => {
+                let props = client.props().await.ok()?;
+                props["default_generation_settings"]["n_ctx"]
+                    .as_u64()
+                    .or_else(|| props["n_ctx"].as_u64())
+                    .filter(|n| *n > 0)
+            }
+            Endpoint::Remote(_) => None,
+        }
+    }
+
     /// A client for the model's server, starting it first (and saying so) when it's a local
     /// model that isn't loaded.
     pub async fn connect(&self, run: &Run) -> Result<LlmClient, LlmError> {
@@ -436,33 +453,104 @@ impl Chat {
             user_message_id,
             model: model.label.clone(),
         });
-        let history = match self.store.path_to(parent) {
+        let mut history = match self.store.path_to(parent) {
             Ok(history) => history,
             Err(err) => return fail(run, "store", &err.to_string()),
         };
-        let request = build_request(
-            session,
-            &self.settings.get(),
-            &history,
-            model,
-            &ChatParams::of(session),
-        );
-        let message = match self.store.insert_message(NewMessage::assistant(
-            &session.id,
-            Some(parent),
-            &model.label,
-        )) {
-            Ok(message) => message,
-            Err(err) => return fail(run, "store", &err.to_string()),
+        let mut parent = parent.to_owned();
+        let mut window = match model.connect(run).await {
+            Ok(client) => model.window(&client).await,
+            Err(_) => None,
         };
-        run.emit(RunEvent::MessageStarted {
-            message_id: message.id.clone(),
-            parent_id: Some(parent.to_owned()),
-        });
-        // Named as soon as it starts, so the sidebar shows it right away.
-        auto_title(&self.store, run, &session.id);
-
-        let outcome = stream_reply(&self.store, run, &message.id, model, &request).await;
+        let mut overflowed = false;
+        let (message, outcome) = loop {
+            // A long conversation is summarized first, so the reply fits.
+            if let Some(limit) = window
+                && (overflowed || context::should_compact(context::used(&history, ""), limit))
+            {
+                match compact(
+                    &self.store,
+                    run,
+                    model,
+                    &session.id,
+                    0,
+                    &history,
+                    limit,
+                    overflowed,
+                )
+                .await
+                {
+                    Ok(Some(summary)) => {
+                        parent.clone_from(&summary.id);
+                        history.push(summary);
+                    }
+                    Ok(None) => {}
+                    Err(_) if run.cancel.is_cancelled() => return RunEnd::Cancelled,
+                    Err(err) => run.emit(RunEvent::Notice {
+                        level: "warning".into(),
+                        text: format!("The earlier conversation couldn't be summarized: {err}"),
+                    }),
+                }
+            }
+            let request = build_request(
+                session,
+                &self.settings.get(),
+                &history,
+                model,
+                &ChatParams::of(session),
+            );
+            let message = match self.store.insert_message(NewMessage::assistant(
+                &session.id,
+                Some(&parent),
+                &model.label,
+            )) {
+                Ok(message) => message,
+                Err(err) => return fail(run, "store", &err.to_string()),
+            };
+            run.emit(RunEvent::MessageStarted {
+                message_id: message.id.clone(),
+                parent_id: Some(parent.clone()),
+            });
+            // Named as soon as it starts, so the sidebar shows it right away.
+            auto_title(&self.store, run, &session.id);
+            let outcome = stream_reply(&self.store, run, &message.id, model, &request).await;
+            // Too long for the model: summarize the earlier part, then try once more.
+            if let Some(LlmError::ContextExceeded { n_ctx, .. }) = &outcome.error
+                && !overflowed
+            {
+                overflowed = true;
+                // The server's own count wins over what it reported before.
+                window = Some(*n_ctx);
+                let finish = MessageFinish {
+                    status: MessageStatus::Error,
+                    error: outcome.error.as_ref().map(ToString::to_string),
+                    finish_reason: None,
+                    ..MessageFinish::complete("")
+                };
+                let _ = self.store.finish_message(&message.id, &finish);
+                run.emit(RunEvent::MessageFinished {
+                    message_id: message.id,
+                    status: "error".into(),
+                    finish_reason: None,
+                    usage: None,
+                    reasoning_ms: None,
+                    content: None,
+                    tool_calls: Vec::new(),
+                });
+                continue;
+            }
+            break (message, outcome);
+        };
+        let mut outcome = outcome;
+        if let Some(usage) = &mut outcome.usage {
+            usage.context_window = window;
+            if let Some(limit) = window {
+                run.emit(RunEvent::Context {
+                    used: usage.prompt_tokens + usage.completion_tokens,
+                    limit,
+                });
+            }
+        }
 
         let (status, end) = match &outcome.error {
             None => (MessageStatus::Complete, RunEnd::Completed),
@@ -509,6 +597,52 @@ impl Chat {
         });
         end
     }
+}
+
+/// Summarizes the earlier part of a conversation (`history` ends where the next reply goes) and
+/// saves the summary after it. `None` when there's too little to summarize.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn compact(
+    store: &Store,
+    run: &Run,
+    model: &ResolvedModel,
+    session_id: &str,
+    turn: i64,
+    history: &[Message],
+    window: u64,
+    forced: bool,
+) -> Result<Option<Message>, String> {
+    let view = context::view(history);
+    let cut = if forced {
+        context::cut_forced(&view.messages)
+    } else {
+        context::cut(&view.messages, window)
+    };
+    let Some(cut) = cut else {
+        return Ok(None);
+    };
+    run.emit(RunEvent::Compacting);
+    let client = model.connect(run).await.map_err(|e| e.to_string())?;
+    let summary = tokio::select! {
+        summary = context::summarize(
+            &client,
+            &model.model,
+            model.llama_extensions,
+            view.summary.as_deref(),
+            &view.messages[..cut],
+            window,
+        ) => summary.map_err(|e| e.to_string())?,
+        () = run.cancel.cancelled() => return Err("Stopped.".into()),
+    };
+    let covers = view.messages[cut - 1].id.clone();
+    let parent = history.last().map(|m| m.id.clone()).unwrap_or_default();
+    let mut new = NewMessage::summary(session_id, &parent, &summary, &covers);
+    new.turn = turn;
+    let saved = store.insert_message(new).map_err(|e| e.to_string())?;
+    run.emit(RunEvent::Compacted {
+        message: Box::new(saved.clone()),
+    });
+    Ok(Some(saved))
 }
 
 /// A conversation keeps the model it started with.
@@ -743,11 +877,24 @@ fn build_request(
                 .filter(|p| !p.trim().is_empty())
         })
         .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_owned());
-    let mut messages = vec![ChatMessage::system(format!(
-        "{base}\n\nToday's date: {}.",
-        today()
+    // A summary stands in for the earliest messages once the conversation got long.
+    let view = context::view(history);
+    let system = format!("{base}\n\nToday's date: {}.", today());
+    let mut messages = vec![ChatMessage::system(context::with_summary(
+        &system,
+        view.summary.as_deref(),
     ))];
-    for message in history {
+    if view.summary.is_some()
+        && view
+            .messages
+            .first()
+            .is_some_and(|m| m.role != MessageRole::User)
+    {
+        messages.push(ChatMessage::user(
+            "(The conversation continues from the summary above.)",
+        ));
+    }
+    for message in &view.messages {
         match message.role {
             MessageRole::User => messages.push(ChatMessage::user(message.content.as_str())),
             MessageRole::Assistant

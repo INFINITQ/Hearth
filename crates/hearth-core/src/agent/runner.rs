@@ -29,6 +29,7 @@ use super::prompt;
 use super::shell::{self, Shell, ShellKind};
 use super::tools::{self, Action, Prepared, Stamps, Todo, TodoStatus, ToolCx};
 use crate::chat::{self, ChatError, ChatParams, ModelResolver, ResolvedModel, StartedRun};
+use crate::context;
 use crate::llm::{
     ChatMessage, ChatRequest, FinishReason, LlmError, Role, ToolCall, ToolDef, toolparse,
 };
@@ -275,7 +276,18 @@ fn build_request(
     params: &ChatParams,
     extras: Extras,
 ) -> ChatRequest {
-    let mut messages = vec![ChatMessage::system(system)];
+    // A summary stands in for the earliest messages once the conversation got long.
+    let view = context::view(history);
+    let history = &view.messages;
+    let mut messages = vec![ChatMessage::system(context::with_summary(
+        system,
+        view.summary.as_deref(),
+    ))];
+    if view.summary.is_some() && history.first().is_some_and(|m| m.role != MessageRole::User) {
+        messages.push(ChatMessage::user(
+            "(The conversation continues from the summary above.)",
+        ));
+    }
     let last_user = history.iter().rposition(|m| m.role == MessageRole::User);
     for (index, message) in history.iter().enumerate() {
         match message.role {
@@ -675,6 +687,13 @@ impl Agent {
         };
         let mut todos = latest_todos(&history);
         let mut repeats = Repeats::default();
+        // The model's context window (a local model's setting, or what its server reports).
+        let mut window = match job.model.connect(run).await {
+            Ok(client) => job.model.window(&client).await,
+            Err(_) => None,
+        };
+        let mut compact_now = false;
+        let mut overflowed = false;
 
         for step in 1..=MAX_STEPS {
             if run.cancel.is_cancelled() {
@@ -682,6 +701,20 @@ impl Agent {
             }
             if let Err(err) = self.take_steers(job, &mut history, step) {
                 return chat::fail(run, "store", &err);
+            }
+            if let Some(limit) = window
+                && (compact_now || context::should_compact(context::used(&history, &system), limit))
+            {
+                let forced = std::mem::take(&mut compact_now);
+                if let Err(err) = self.compact(job, &mut history, limit, forced).await {
+                    if run.cancel.is_cancelled() {
+                        return RunEnd::Cancelled;
+                    }
+                    run.emit(RunEvent::Notice {
+                        level: "warning".into(),
+                        text: format!("The earlier conversation couldn't be summarized: {err}"),
+                    });
+                }
             }
             let leaf = history.last().map_or(user.id.clone(), |m| m.id.clone());
             let mut note = String::new();
@@ -734,6 +767,10 @@ impl Agent {
                 .as_ref()
                 .filter(|e| **e != LlmError::Cancelled);
             let finish_reason = streamed.finish.as_ref().map(|f| f.as_str().to_owned());
+            let mut usage = streamed.usage.clone();
+            if let Some(usage) = &mut usage {
+                usage.context_window = window;
+            }
             let finish = MessageFinish {
                 content: content.clone(),
                 reasoning: (!streamed.reasoning.is_empty()).then(|| streamed.reasoning.clone()),
@@ -742,10 +779,7 @@ impl Agent {
                 finish_reason: finish_reason.clone(),
                 status,
                 error: error.map(ToString::to_string),
-                usage: streamed
-                    .usage
-                    .as_ref()
-                    .and_then(|u| serde_json::to_value(u).ok()),
+                usage: usage.as_ref().and_then(|u| serde_json::to_value(u).ok()),
             };
             let saved = match store.finish_message(&message.id, &finish) {
                 Ok(saved) => saved,
@@ -755,15 +789,29 @@ impl Agent {
                 message_id: message.id.clone(),
                 status: chat::status_name(status).into(),
                 finish_reason,
-                usage: streamed.usage.clone(),
+                usage: usage.clone(),
                 reasoning_ms: streamed.reasoning_ms,
                 content: (content != streamed.content).then(|| content.clone()),
                 tool_calls: calls.clone(),
             });
             history.push(saved);
+            if let (Some(limit), Some(usage)) = (window, &usage) {
+                run.emit(RunEvent::Context {
+                    used: usage.prompt_tokens + usage.completion_tokens,
+                    limit,
+                });
+            }
 
             match &streamed.error {
                 Some(LlmError::Cancelled) => return RunEnd::Cancelled,
+                // Too long for the model: summarize the earlier part and try the step again.
+                Some(LlmError::ContextExceeded { n_ctx, .. }) if !overflowed => {
+                    overflowed = true;
+                    compact_now = true;
+                    // The server's own count wins over what it reported before.
+                    window = Some(*n_ctx);
+                    continue;
+                }
                 Some(err) => {
                     run.emit(RunEvent::Error {
                         code: err.code().into(),
@@ -838,6 +886,30 @@ impl Agent {
             text: format!("Paused after {MAX_STEPS} steps. Send a message to let it continue."),
         });
         RunEnd::Paused
+    }
+
+    /// Summarizes the earlier part of the conversation; a summary message then stands in for it
+    /// in requests.
+    async fn compact(
+        &self,
+        job: &Job<'_>,
+        history: &mut Vec<Message>,
+        window: u64,
+        forced: bool,
+    ) -> Result<(), String> {
+        let summary = chat::compact(
+            &self.0.store,
+            job.run,
+            job.model,
+            &job.session.id,
+            job.turn,
+            history,
+            window,
+            forced,
+        )
+        .await?;
+        history.extend(summary);
+        Ok(())
     }
 
     fn save_answer(

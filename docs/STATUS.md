@@ -90,9 +90,27 @@ Where the build stands (plan: README "Status"; engineering details: build-notes.
     - Vitest: 22.
     - Playwright E2E: 31.
 
-## Next: M6, context management
+- **M6**: context management.
+  - **Backend** (`hearth-core/src/context.rs`, `chat.rs`, `agent/runner.rs`):
+    - The window from the local model's settings or llama.cpp's `/props`; saved with each
+      reply's usage (`contextWindow`) and sent as a `context` event.
+    - Above 80%, the older part is summarized by the same model; recent messages keep 35% of the
+      window; cuts fall before a user or assistant message, never inside a tool exchange.
+    - Summaries are `summary` messages (migration 4 adds `covers_until`); requests carry the
+      newest summary in the system prompt plus the messages after it. Nothing is deleted.
+    - "Exceeds the available context size" from llama-server: its `n_ctx` wins, the earlier part
+      is summarized, and the request is tried once more. Works for chats and coding tasks.
+  - **UI:** the context meter in the composer (ring and percentage, with a tooltip), a divider
+    where earlier messages were summarized (opens to show the summary), and "Summarizing the
+    earlier conversation to make room…" while it happens. The chat transcript now also shows
+    "Loading <model>…" before the reply starts.
+  - **Tests (all green):**
+    - Rust: 107 core unit, 17 agent, 9 chat, 11 client, 1 runtime, 4 app.
+    - Vitest: 23.
+    - Playwright E2E: 32.
 
-- Usage from llama-server against the model's context; a context meter in coding sessions.
-- Near 80%, older turns are summarized by the same model (a `summary` message in the tree);
-  the full history stays in the database.
-- Tool outputs capped further when the context is tight.
+## Next: M7, the terminal panel
+
+- ConPTY shells (Git Bash by default, PowerShell) in xterm.js tabs below the coding session.
+- Each terminal in its own Job Object; closing a tab or the app ends its processes.
+- An "Agent" tab that follows the output of the agent's commands.

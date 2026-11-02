@@ -12,6 +12,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { cn } from '../lib/cn';
 import type { Message } from '../lib/types';
 import { useChat } from '../stores/chat';
+import { SummaryDivider } from './ContextMeter';
 import { Markdown } from './Markdown';
 import { ThinkingBlock } from './ThinkingBlock';
 import { Button, IconButton } from './ui/Button';
@@ -25,6 +26,7 @@ export function MessageView({
   live: boolean;
   last: boolean;
 }) {
+  if (message.role === 'summary') return <SummaryDivider message={message} />;
   return message.role === 'user' ? (
     <UserMessage message={message} />
   ) : (
@@ -216,14 +218,19 @@ function AssistantMessage({
   );
 }
 
-/** Shown while Hearth starts the model's llama-server. */
-export function ModelLoadingLine({ model }: { model: string }) {
+/** A spinner and what Hearth is doing before the reply starts. */
+export function ProgressLine({ text }: { text: string }) {
   return (
     <p className="flex items-center gap-2 text-[13px] text-text-2" aria-live="polite">
       <LoaderCircle className="size-3.5 animate-spin text-accent" />
-      <span className="thinking-shimmer">Loading {model}… the first reply can take a minute.</span>
+      <span className="thinking-shimmer">{text}</span>
     </p>
   );
+}
+
+/** Shown while Hearth starts the model's llama-server. */
+export function ModelLoadingLine({ model }: { model: string }) {
+  return <ProgressLine text={`Loading ${model}… the first reply can take a minute.`} />;
 }
 
 export function TypingDots() {

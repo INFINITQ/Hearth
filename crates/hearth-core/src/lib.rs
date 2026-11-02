@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod chat;
+pub mod context;
 pub mod fsutil;
 pub mod llm;
 pub mod proc;

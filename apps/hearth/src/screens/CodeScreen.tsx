@@ -1,6 +1,7 @@
 import { Clock, FolderOpen, FolderPlus, SquareTerminal } from 'lucide-react';
 import { useMemo } from 'react';
 import { Composer } from '../components/Composer';
+import { ContextMeter } from '../components/ContextMeter';
 import { RunErrorBanner } from '../components/Transcript';
 import { ChangesPanel } from '../components/code/ChangesPanel';
 import { CodeTranscript } from '../components/code/CodeTranscript';
@@ -174,6 +175,7 @@ function Session({ project }: { project: Project }) {
             onSend={send}
             onStop={stop}
             tools={<ModeSwitch />}
+            status={<ContextMeter />}
             onShiftTab={cycleMode}
             autoFocus
           />

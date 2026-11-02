@@ -15,6 +15,8 @@ type ComposerProps = {
   onShiftTab?(): void;
   /** Messages can be sent while running (coding sessions: they join the task). */
   sendWhileRunning?: boolean;
+  /** Shown left of the send button (the context meter). */
+  status?: ReactNode;
   autoFocus?: boolean;
   className?: string;
 };
@@ -30,6 +32,7 @@ export function Composer({
   tools,
   onShiftTab,
   sendWhileRunning = false,
+  status,
   autoFocus,
   className,
 }: ComposerProps) {
@@ -86,6 +89,7 @@ export function Composer({
         </IconButton>
         {tools}
         <div className="flex-1" />
+        {status}
         {running ? (
           <>
             {canSend && (

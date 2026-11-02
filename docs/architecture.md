@@ -93,6 +93,26 @@ Hearth runs local models itself with llama.cpp's `llama-server`, one process per
 - **Using a model:** a `local` model reference resolves to `Endpoint::Local`; the first request
   loads the server (the run shows "Loading <model>…") and later ones reuse it.
 
+## Context management (`hearth-core/src/context.rs`)
+
+Chats and coding tasks keep their requests inside the model's context window.
+
+- **The window** comes from the local model's settings, or from `/props` on a llama.cpp
+  connection. Other servers have no known window and are never compacted.
+- **How full it is:** the newest reply's own token count (prompt plus reply) plus estimates
+  (4 characters a token) for what came after it. Every finished reply saves the window with its
+  usage, and the run sends a `context` event, so the composer's meter shows the share in use.
+- **Compacting:** before a request that would use more than 80% of the window, the older part is
+  summarized by the same model (not streamed, thinking off, at most 1,200 tokens). Recent
+  messages keep up to 35% of the window word for word, and a cut never separates a tool call from
+  its result. The summary is saved as a `summary` message after the newest message, with
+  `covers_until` naming the last message it stands in for. Requests then carry the summary in the
+  system prompt and only the messages after `covers_until`. Nothing is deleted: the transcript
+  shows every message, with a divider where the summary was made (it opens to show it).
+- **When the server says no:** if llama-server still answers "exceeds the available context
+  size", its `n_ctx` replaces the known window, everything before the newest user message is
+  summarized, and the request is tried once more.
+
 ## Window
 
 The window is frameless and has a custom title bar. Windows 11 Snap Layouts work through a native

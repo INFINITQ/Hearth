@@ -2,7 +2,8 @@ import { ArrowDown, TriangleAlert, X } from 'lucide-react';
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useApp } from '../stores/app';
 import { useChat } from '../stores/chat';
-import { MessageView, TypingDots } from './MessageView';
+import type { LiveRun } from '../lib/runReducer';
+import { MessageView, ModelLoadingLine, ProgressLine, TypingDots } from './MessageView';
 import { Button, IconButton } from './ui/Button';
 
 /** The conversation: follows new text unless you scroll up to read. */
@@ -16,7 +17,7 @@ export function Transcript() {
   useLayoutEffect(() => {
     const el = box.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [messages, run?.progress]);
+  }, [messages, run?.progress, run?.compacting, run?.loading]);
 
   const onScroll = () => {
     const el = box.current;
@@ -44,7 +45,7 @@ export function Transcript() {
               last={index === messages.length - 1}
             />
           ))}
-          {run?.status === 'starting' && <Waiting progress={run.progress} />}
+          {run && <BeforeReply run={run} />}
           <RunErrorBanner />
         </div>
       </div>
@@ -63,6 +64,16 @@ export function Transcript() {
       )}
     </div>
   );
+}
+
+/** What happens before the reply's first words: loading the model, summarizing, reading. */
+function BeforeReply({ run }: { run: LiveRun }) {
+  if (run.compacting) {
+    return <ProgressLine text="Summarizing the earlier conversation to make room…" />;
+  }
+  if (run.status !== 'starting') return null;
+  if (run.loading) return <ModelLoadingLine model={run.loading} />;
+  return <Waiting progress={run.progress} />;
 }
 
 export function Waiting({ progress }: { progress: { processed: number; total: number } | null }) {

@@ -234,6 +234,33 @@ describe('commands and messages sent mid-task', () => {
   });
 });
 
+describe('summarizing a long conversation', () => {
+  it('shows the summary after the newest message and keeps the context count', () => {
+    let state = play(
+      start([
+        message('u1', 'user', 'Plan a trip', null),
+        message('a1', 'assistant', 'A long plan', 'u1'),
+        message('u2', 'user', 'Which day?', 'a1'),
+      ]),
+      [
+        event({ type: 'started', sessionId: 's', userMessageId: 'u2', model: 'm' }),
+        event({ type: 'compacting' }),
+      ],
+    );
+    expect(state.run?.compacting).toBe(true);
+    const summary = { ...message('sum1', 'summary', '- A trip plan', 'u2'), coversUntil: 'a1' };
+    state = play(state, [
+      event({ type: 'compacted', message: summary }),
+      event({ type: 'message_started', messageId: 'a2', parentId: 'sum1' }),
+      event({ type: 'context', used: 480, limit: 2048 }),
+    ]);
+    expect(state.run?.compacting).toBe(false);
+    // The summary stands in for earlier messages in requests; the transcript keeps them all.
+    expect(state.messages.map((m) => m.id)).toEqual(['u1', 'a1', 'u2', 'sum1', 'a2']);
+    expect(state.run?.context).toEqual({ used: 480, limit: 2048 });
+  });
+});
+
 describe('withLiveText', () => {
   it('keeps the newest streamed text over an older saved copy', () => {
     const saved = [message('a1', 'assistant', 'Hel', null)];

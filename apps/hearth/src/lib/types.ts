@@ -241,6 +241,8 @@ export type Usage = {
   cachedTokens?: number;
   promptPerSecond?: number;
   predictedPerSecond?: number;
+  /** The model's context window, when Hearth knows it. */
+  contextWindow?: number;
 };
 
 export type MessageStatus = 'streaming' | 'complete' | 'interrupted' | 'error';
@@ -263,6 +265,8 @@ export type Message = {
   versions: { index: number; ids: string[] };
   /** Coding sessions: the task this message belongs to (1, 2, …). */
   turn?: number;
+  /** Summaries: the last message they stand in for. */
+  coversUntil?: string | null;
   /** Coding sessions: an assistant message's tool calls, and a tool message's answer. */
   toolCalls?: ToolCall[] | null;
   toolCallId?: string | null;
@@ -321,6 +325,9 @@ export type RunEvent =
   | { type: 'tool_started'; callId: string; tool: string; title: string }
   | { type: 'tool_output'; callId: string; text: string }
   | { type: 'steered'; message: Message }
+  | { type: 'compacting' }
+  | { type: 'compacted'; message: Message }
+  | { type: 'context'; used: number; limit: number }
   | { type: 'tool_finished'; callId: string; status: ToolStatus; summary: string; message: Message }
   | ({ type: 'permission_request' } & PermissionRequest)
   | { type: 'permission_resolved'; requestId: string; decision: PermissionChoice['id'] }

@@ -397,6 +397,7 @@ fn usage_from(usage: Option<&Value>, timings: Option<&Value>) -> Usage {
         }),
         prompt_per_second: float(timings, "prompt_per_second"),
         predicted_per_second: float(timings, "predicted_per_second"),
+        context_window: None,
     }
 }
 

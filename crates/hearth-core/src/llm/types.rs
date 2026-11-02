@@ -243,6 +243,9 @@ pub struct Usage {
     pub prompt_per_second: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub predicted_per_second: Option<f64>,
+    /// The model's context window, when Hearth knows it (added by Hearth, not the server).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
 }
 
 /// One piece of a streamed reply.

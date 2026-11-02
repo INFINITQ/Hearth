@@ -5,6 +5,7 @@ import type { LiveRun, RunNotice } from '../../lib/runReducer';
 import { answersByStep } from '../../lib/toolCalls';
 import type { Message, ToolCall } from '../../lib/types';
 import { useChat } from '../../stores/chat';
+import { SummaryDivider } from '../ContextMeter';
 import { Markdown } from '../Markdown';
 import { CopyButton, stats } from '../MessageView';
 import { ThinkingBlock } from '../ThinkingBlock';
@@ -77,6 +78,8 @@ export function CodeTranscript() {
                 message={message}
                 undoable={taskStarts.has(message.id) && run === null}
               />
+            ) : message.role === 'summary' ? (
+              <SummaryDivider key={message.id} message={message} />
             ) : message.role === 'assistant' ? (
               <AgentStep
                 key={message.id}
@@ -245,7 +248,9 @@ function AgentStep({
 function LiveStatus({ run, messages }: { run: LiveRun | null; messages: Message[] }) {
   if (!run || run.permission || run.question || run.tool) return null;
   let text = 'Thinking…';
-  if (run.loading) {
+  if (run.compacting) {
+    text = 'Summarizing the earlier conversation to make room…';
+  } else if (run.loading) {
     text = `Loading ${run.loading}… the first reply can take a minute.`;
   } else if (run.writing) {
     const size =

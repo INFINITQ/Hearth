@@ -26,6 +26,10 @@ export type LiveRun = {
   queued: string[];
   /** The model being loaded before the reply can start (Hearth's own llama-server). */
   loading: string | null;
+  /** The earlier conversation is being summarized to make room. */
+  compacting: boolean;
+  /** How full the context window was after the newest reply. */
+  context: { used: number; limit: number } | null;
 };
 
 /** Live command output kept per call. */
@@ -57,6 +61,8 @@ export function newRun(sessionId: string, runId: string | null = null): LiveRun 
     output: {},
     queued: [],
     loading: null,
+    compacting: false,
+    context: null,
   };
 }
 
@@ -140,6 +146,16 @@ export function applyRunEvent(state: TranscriptState, event: RunEnvelope): Trans
     }
     case 'model_loading':
       return { ...state, run: { ...live, loading: event.model } };
+    case 'compacting':
+      return { ...state, run: { ...live, compacting: true } };
+    case 'compacted':
+      return {
+        ...state,
+        messages: placeAfterParent(state.messages, event.message),
+        run: { ...live, compacting: false },
+      };
+    case 'context':
+      return { ...state, run: { ...live, context: { used: event.used, limit: event.limit } } };
     case 'prompt_progress':
       return {
         ...state,

@@ -703,3 +703,114 @@ async fn messages_sent_while_working_join_the_next_step() {
     assert!(sink.events().iter().any(|e| matches!(e, RunEvent::Steered { message } if message.content == "Also look at the README")));
     assert!(h.agent.steer(&run_id, "too late").is_err());
 }
+
+// ── M6: context management ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn long_sessions_are_summarized_to_fit_the_window() {
+    let long = "word ".repeat(1000);
+    let mut script = Script::new()
+        .reply(Reply::text("OK.").usage(1700, 5))
+        .reply(Reply::text(
+            "SUMMARY: the user pasted a long list of words.",
+        ))
+        .expect_then(
+            vec![
+                Expect::SystemContains("SUMMARY: the user pasted a long list of words.".into()),
+                Expect::LastUserContains("Now what?".into()),
+            ],
+            Reply::text("Done."),
+        );
+    script.n_ctx = 2000;
+    let h = harness(script, None).await;
+    let (sink, _) = h.start(&long);
+    assert_eq!(
+        finished(&sink).await,
+        RunEnd::Completed,
+        "{:#?}",
+        sink.events()
+    );
+    assert!(
+        !sink
+            .events()
+            .iter()
+            .any(|e| matches!(e, RunEvent::Compacting)),
+        "one message can't be summarized"
+    );
+
+    let (sink, _) = h.start("Now what?");
+    assert_eq!(
+        finished(&sink).await,
+        RunEnd::Completed,
+        "{:#?}",
+        sink.events()
+    );
+    let events = sink.events();
+    assert!(events.iter().any(|e| matches!(e, RunEvent::Compacting)));
+    let summary = events
+        .iter()
+        .find_map(|e| match e {
+            RunEvent::Compacted { message } => Some(message.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        summary.content,
+        "SUMMARY: the user pasted a long list of words."
+    );
+    let path = h.store.active_path(&h.session_id).unwrap();
+    assert_eq!(summary.covers_until.as_deref(), Some(path[0].id.as_str()));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, RunEvent::Context { limit: 2000, .. }))
+    );
+
+    let requests = h.server.requests();
+    let summarizing = &requests[1];
+    assert!(
+        summarizing["tools"].is_null(),
+        "the summary request has no tools"
+    );
+    assert_eq!(
+        summarizing["chat_template_kwargs"]["enable_thinking"],
+        false
+    );
+    let last = &requests[2]["messages"];
+    assert_eq!(
+        last[1]["content"],
+        "(The conversation continues from the summary above.)"
+    );
+    assert_eq!(last[2]["content"], "OK.");
+    // The reply saved the window size for the context meter.
+    let reply = path.last().unwrap();
+    assert_eq!(reply.usage.as_ref().unwrap()["contextWindow"], 2000);
+}
+
+#[tokio::test]
+async fn a_request_too_long_for_the_model_is_summarized_and_tried_again() {
+    let long = "word ".repeat(1000);
+    let script = Script::new()
+        .reply(Reply::text("OK."))
+        .reply(Reply::fault(hearth_testkit::Fault::ContextExceeded {
+            n_ctx: 4096,
+            n_prompt: 5200,
+        }))
+        .reply(Reply::text("SUMMARY: words."))
+        .expect_then(
+            vec![Expect::SystemContains("SUMMARY: words.".into())],
+            Reply::text("Fits now."),
+        );
+    let h = harness(script, None).await;
+    let (sink, _) = h.start(&long);
+    assert_eq!(finished(&sink).await, RunEnd::Completed);
+    let (sink, _) = h.start("And then?");
+    assert_eq!(
+        finished(&sink).await,
+        RunEnd::Completed,
+        "{:#?}",
+        sink.events()
+    );
+    let path = h.store.active_path(&h.session_id).unwrap();
+    assert_eq!(path.last().unwrap().content, "Fits now.");
+}

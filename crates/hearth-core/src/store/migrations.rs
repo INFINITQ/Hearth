@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use super::{Result, StoreError};
 
-const MIGRATIONS: &[&str] = &[INITIAL, PROJECTS, CHECKPOINTS];
+const MIGRATIONS: &[&str] = &[INITIAL, PROJECTS, CHECKPOINTS, SUMMARIES];
 
 const INITIAL: &str = r#"
 CREATE TABLE kv (
@@ -121,6 +121,12 @@ CREATE TABLE permission_rules (
   created_at INTEGER NOT NULL,
   UNIQUE (workspace_id, class, pattern)
 );
+"#;
+
+/// M6: a summary message stands in for the messages up to `covers_until` when Hearth builds a
+/// request (the messages themselves stay, for the transcript and search).
+const SUMMARIES: &str = r#"
+ALTER TABLE messages ADD COLUMN covers_until TEXT;
 "#;
 
 pub fn apply(conn: &mut Connection) -> Result<()> {

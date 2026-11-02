@@ -375,6 +375,21 @@ impl Runtime {
         Ok(info)
     }
 
+    /// The context window a model runs with (its preset's, else Hearth's default).
+    pub fn context_window(&self, model_id: &str) -> Option<u64> {
+        let model = self.model(model_id)?;
+        let preset = self
+            .0
+            .settings
+            .get()
+            .runtime
+            .presets
+            .get(model_id)
+            .cloned()
+            .unwrap_or_default();
+        Some(context_for(&model, &preset))
+    }
+
     pub fn is_ready(&self, model_id: &str) -> bool {
         lock(&self.0.servers)
             .get(model_id)

@@ -91,6 +91,8 @@ pub struct Message {
     pub error: Option<String>,
     pub usage: Option<Value>,
     pub created_at: i64,
+    /// Summaries: the last message they stand in for.
+    pub covers_until: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +111,7 @@ pub struct NewMessage {
     pub tool_display: Option<Value>,
     pub model_label: Option<String>,
     pub status: MessageStatus,
+    pub covers_until: Option<String>,
 }
 
 impl NewMessage {
@@ -133,6 +136,7 @@ impl NewMessage {
             tool_display: None,
             model_label: None,
             status,
+            covers_until: None,
         }
     }
 
@@ -157,6 +161,20 @@ impl NewMessage {
                 parent_id,
                 MessageRole::Assistant,
                 MessageStatus::Streaming,
+            )
+        }
+    }
+
+    /// A summary that stands in for the messages up to `covers_until` in requests.
+    pub fn summary(session_id: &str, parent_id: &str, text: &str, covers_until: &str) -> Self {
+        Self {
+            content: text.to_owned(),
+            covers_until: Some(covers_until.to_owned()),
+            ..Self::base(
+                session_id,
+                Some(parent_id),
+                MessageRole::Summary,
+                MessageStatus::Complete,
             )
         }
     }
@@ -212,7 +230,7 @@ impl MessageFinish {
 
 const COLUMNS: &str = "id, session_id, parent_id, role, turn, step, content, reasoning, reasoning_ms, \
     tool_calls, tool_call_id, tool_name, tool_status, tool_display, model_label, finish_reason, status, error, \
-    usage, created_at";
+    usage, created_at, covers_until";
 
 fn row_to_message(row: &Row) -> rusqlite::Result<Message> {
     let role: String = row.get(3)?;
@@ -238,6 +256,7 @@ fn row_to_message(row: &Row) -> rusqlite::Result<Message> {
         error: row.get(17)?,
         usage: from_json(row.get(18)?),
         created_at: row.get(19)?,
+        covers_until: row.get(20)?,
     })
 }
 
@@ -293,8 +312,8 @@ impl Store {
         let now = now_ms();
         tx.execute(
             "INSERT INTO messages (id, session_id, parent_id, role, turn, step, content, reasoning, tool_calls,
-               tool_call_id, tool_name, tool_status, tool_display, model_label, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+               tool_call_id, tool_name, tool_status, tool_display, model_label, status, created_at, covers_until)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 id,
                 new.session_id,
@@ -311,7 +330,8 @@ impl Store {
                 to_json(new.tool_display.as_ref()),
                 new.model_label,
                 new.status.as_str(),
-                now
+                now,
+                new.covers_until
             ],
         )?;
         tx.execute(

@@ -1,4 +1,5 @@
 import { Composer } from '../components/Composer';
+import { ContextMeter } from '../components/ContextMeter';
 import { ParamsPopover } from '../components/ParamsPopover';
 import { RunErrorBanner, Transcript } from '../components/Transcript';
 import { useApp } from '../stores/app';
@@ -29,6 +30,7 @@ export function ChatScreen() {
           onSend={send}
           onStop={stop}
           tools={<ParamsPopover />}
+          status={<ContextMeter />}
           autoFocus
         />
         <p className="mt-2 text-center text-[11.5px] text-text-3">

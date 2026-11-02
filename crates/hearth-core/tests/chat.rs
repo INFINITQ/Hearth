@@ -330,3 +330,52 @@ async fn one_reply_at_a_time_per_chat() {
     h.server.release("h");
     assert_eq!(wait_finished(&sink).await, RunEnd::Completed);
 }
+
+#[tokio::test]
+async fn long_chats_are_summarized_to_fit_the_window() {
+    let mut script = Script::new()
+        .reply(Reply::text("Noted.").usage(1700, 5))
+        .reply(Reply::text("SUMMARY: a long list of numbers."))
+        .expect_then(
+            vec![Expect::SystemContains(
+                "SUMMARY: a long list of numbers.".into(),
+            )],
+            Reply::text("It was a list of numbers."),
+        );
+    script.n_ctx = 2000;
+    let h = harness(script).await;
+    let session = h.store.create_session(Mode::Chat, None).unwrap();
+    let long: String = (0..1500).map(|n| format!("{n} ")).collect();
+    let sink = Arc::new(CollectSink::default());
+    h.chat
+        .start(&session.id, ChatAction::Send { text: long }, sink.clone())
+        .unwrap();
+    assert_eq!(wait_finished(&sink).await, RunEnd::Completed);
+
+    let sink = Arc::new(CollectSink::default());
+    h.chat
+        .start(
+            &session.id,
+            ChatAction::Send {
+                text: "What did I send?".into(),
+            },
+            sink.clone(),
+        )
+        .unwrap();
+    assert_eq!(
+        wait_finished(&sink).await,
+        RunEnd::Completed,
+        "{:#?}",
+        sink.events()
+    );
+    let path = h.store.active_path(&session.id).unwrap();
+    let roles: Vec<MessageRole> = path.iter().map(|m| m.role).collect();
+    use MessageRole::{Assistant, Summary, User};
+    assert_eq!(roles, [User, Assistant, User, Summary, Assistant]);
+    assert_eq!(path[4].content, "It was a list of numbers.");
+    assert!(
+        sink.events()
+            .iter()
+            .any(|e| matches!(e, RunEvent::Context { limit: 2000, .. }))
+    );
+}

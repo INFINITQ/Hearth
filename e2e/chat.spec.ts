@@ -210,6 +210,64 @@ test('a server error shows on the reply, and Try again recovers', async () => {
   await expect(lastReply(page)).toContainText('Recovered fine.');
 });
 
+test('a long chat is summarized to fit the window, with a divider and the context meter', async () => {
+  // About 4,000 characters: more than the 35% of a 2,048-token window that recent messages keep.
+  const plan = Array.from(
+    { length: 40 },
+    (_, i) =>
+      `- Day ${i + 1}: a temple in the morning, a long walk by the river after lunch, dinner near Gion.`,
+  ).join('\n');
+  await mock.setScript({
+    n_ctx: 2048,
+    steps: [
+      { reply: { content: plan, usage: { prompt_tokens: 600, completion_tokens: 1100 } } },
+      // The summary of the first exchange (not streamed).
+      {
+        reply: {
+          content:
+            '- The user is planning 40 days in Kyoto.\n- Every day: a temple, a river walk, dinner near Gion.',
+        },
+      },
+      {
+        reply: {
+          content: 'Day 3 is the quietest one.',
+          usage: { prompt_tokens: 420, completion_tokens: 60 },
+        },
+      },
+    ],
+  });
+  const { page } = app;
+  const dir = join('test-results', 'screens');
+  mkdirSync(dir, { recursive: true });
+  await send(page, 'Plan 40 days in Kyoto');
+  await expect(lastReply(page)).toContainText('Day 40');
+  const meter = page.getByRole('meter', { name: 'Context used' });
+  await expect(meter).toHaveText('83%');
+
+  await send(page, 'Which day is the quietest?');
+  await expect(lastReply(page)).toContainText('Day 3 is the quietest one.');
+  const divider = page.locator('[data-role="summary"]');
+  await expect(divider).toContainText('Earlier messages were summarized to make room');
+  await expect(meter).toHaveText('23%');
+
+  // The reply was asked with the summary standing in for the long plan.
+  const requests = await mock.requests();
+  expect(requests).toHaveLength(3);
+  const asked = requests[2]!.messages;
+  expect(String(asked[0]!.content)).toContain('<summary_of_earlier_conversation>');
+  expect(JSON.stringify(asked)).not.toContain('Day 40');
+  // The plan itself stays in the transcript.
+  await expect(page.getByText('Day 40', { exact: false })).toBeVisible();
+
+  await divider.getByRole('button').click();
+  await expect(divider).toContainText('planning 40 days in Kyoto');
+  for (const theme of ['light', 'dark'] as const) {
+    await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme);
+    await page.waitForTimeout(150);
+    await page.screenshot({ path: join(dir, `m6-summary-${theme}.png`) });
+  }
+});
+
 test('screenshots of a conversation in light and dark, for visual review', async () => {
   await mock.setScript({
     steps: [

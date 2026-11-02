@@ -11,7 +11,7 @@ export const MOCK_EXE = 'target/debug/hearth-mock-llm.exe';
 export type MockLlm = {
   url: string;
   /** Replaces the script: each chat request consumes the next step. */
-  setScript(script: { steps: object[]; model?: string }): Promise<void>;
+  setScript(script: { steps: object[]; model?: string; n_ctx?: number }): Promise<void>;
   /** Lets replies held at `hold` finish. */
   release(hold: string): Promise<void>;
   requests(): Promise<Array<{ messages: Array<{ role: string; content: unknown }> }>>;
