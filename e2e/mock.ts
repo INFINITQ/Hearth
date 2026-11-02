@@ -15,6 +15,8 @@ export type MockLlm = {
     steps: object[];
     model?: string;
     n_ctx?: number;
+    /** What `/props` reports: the model can see images. */
+    vision?: boolean;
     /** SearXNG-style results for `GET /search`, and pages served at `/pages/<name>`. */
     search?: object[];
     pages?: Record<string, string>;

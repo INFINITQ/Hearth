@@ -19,15 +19,15 @@ use crate::agent::tools;
 use crate::context;
 use crate::llm::think::ThinkSplitter;
 use crate::llm::{
-    Assembler, ChatMessage, ChatRequest, Content, FinishReason, LlmClient, LlmError, Role,
-    Sampling, StreamEvent, ToolCall, Usage, toolparse,
+    Assembler, ChatMessage, ChatRequest, Content, ContentPart, FinishReason, ImageUrl, LlmClient,
+    LlmError, Role, Sampling, StreamEvent, ToolCall, Usage, toolparse,
 };
 use crate::runs::{Run, RunEnd, RunEvent, RunManager, RunSink};
 use crate::runtime::Runtime;
 use crate::settings::{ModelRef, Settings, SettingsStore};
 use crate::store::{
-    Message, MessageFinish, MessageRole, MessageStatus, Mode, NewMessage, Session, SessionPatch,
-    Store, StoreError,
+    Attachment, AttachmentKind, Message, MessageFinish, MessageRole, MessageStatus, Mode,
+    NewAttachment, NewMessage, Session, SessionPatch, Store, StoreError,
 };
 use crate::web::Web;
 
@@ -73,6 +73,19 @@ impl ResolvedModel {
                     .filter(|n| *n > 0)
             }
             Endpoint::Remote(_) => None,
+        }
+    }
+
+    /// Whether the model can see images: a local model with its vision projector, or what a
+    /// llama.cpp server reports. Other servers are trusted to say so themselves (`true`).
+    pub async fn vision(&self, client: &LlmClient) -> bool {
+        match &self.endpoint {
+            Endpoint::Local { runtime, model_id } => runtime.vision(model_id).unwrap_or(false),
+            Endpoint::Remote(_) if self.llama_extensions => match client.props().await {
+                Ok(props) => props["modalities"]["vision"].as_bool().unwrap_or(false),
+                Err(_) => true,
+            },
+            Endpoint::Remote(_) => true,
         }
     }
 
@@ -198,6 +211,9 @@ pub enum ChatAction {
         /// Turns web search on or off for this chat (from the composer's Web button).
         #[serde(default)]
         web: Option<bool>,
+        /// Files and images sent with it.
+        #[serde(default)]
+        attachments: Vec<NewAttachment>,
     },
     Regenerate {
         message_id: String,
@@ -289,6 +305,7 @@ enum Plan {
     NewUser {
         parent: Option<String>,
         text: String,
+        attachments: Vec<NewAttachment>,
     },
     Reply {
         parent: String,
@@ -394,14 +411,18 @@ impl Chat {
             .map_err(ChatError::Model)?;
 
         let plan = match action {
-            ChatAction::Send { text, .. } => {
+            ChatAction::Send {
+                text, attachments, ..
+            } => {
                 let text = text.trim();
-                if text.is_empty() {
+                if text.is_empty() && attachments.is_empty() {
                     return Err(ChatError::Invalid("Type a message first.".into()));
                 }
+                crate::store::check_attachments(&attachments)?;
                 Plan::NewUser {
                     parent: session.active_leaf_id.clone(),
                     text: text.to_owned(),
+                    attachments,
                 }
             }
             ChatAction::Edit { message_id, text } => {
@@ -412,12 +433,18 @@ impl Chat {
                     ));
                 }
                 let text = text.trim();
-                if text.is_empty() {
+                if text.is_empty() && original.attachments.is_empty() {
                     return Err(ChatError::Invalid("The edited message is empty.".into()));
                 }
+                // The edited message keeps the original's files.
                 Plan::NewUser {
                     parent: original.parent_id,
                     text: text.to_owned(),
+                    attachments: original
+                        .attachments
+                        .iter()
+                        .map(Attachment::to_new)
+                        .collect(),
                 }
             }
             ChatAction::Regenerate { message_id } => {
@@ -447,12 +474,21 @@ impl Chat {
             .begin(&session.id, sink)
             .map_err(ChatError::Busy)?;
         let (user_message_id, parent) = match plan {
-            Plan::NewUser { parent, text } => {
-                match self.store.insert_message(NewMessage::user(
-                    &session.id,
-                    parent.as_deref(),
-                    &text,
-                )) {
+            Plan::NewUser {
+                parent,
+                text,
+                attachments,
+            } => {
+                let saved = self
+                    .store
+                    .insert_message(NewMessage::user(&session.id, parent.as_deref(), &text))
+                    .and_then(|message| {
+                        if !attachments.is_empty() {
+                            self.store.add_attachments(&message.id, &attachments)?;
+                        }
+                        Ok(message)
+                    });
+                match saved {
                     Ok(message) => (Some(message.id.clone()), message.id),
                     Err(err) => {
                         self.runs.finish(&run.id);
@@ -497,10 +533,11 @@ impl Chat {
             Err(err) => return fail(run, "store", &err.to_string()),
         };
         let mut parent = parent.to_owned();
-        let mut window = match model.connect(run).await {
-            Ok(client) => model.window(&client).await,
-            Err(_) => None,
+        let (mut window, vision) = match model.connect(run).await {
+            Ok(client) => (model.window(&client).await, model.vision(&client).await),
+            Err(_) => (None, true),
         };
+        images_notice(run, model, &history, vision);
         let mut overflowed = false;
         let web_on = session.search_mode.as_deref() == Some(SEARCH_WEB);
         let mut web_steps = 0;
@@ -543,6 +580,7 @@ impl Chat {
                 model,
                 &ChatParams::of(session),
                 web,
+                vision,
             );
             let message = match self.store.insert_message(NewMessage::assistant(
                 &session.id,
@@ -1015,6 +1053,76 @@ pub(crate) fn status_name(status: MessageStatus) -> &'static str {
 }
 
 /// Sampling from the session, plus llama.cpp's extras when the server understands them.
+/// A user message as requests send it: its text with attached files' text, and its images when
+/// the model can see them. Also says how many images were left out (it can't).
+pub(crate) fn user_message(message: &Message, extra: &str, vision: bool) -> (ChatMessage, usize) {
+    let mut text = message.content.clone();
+    for file in message
+        .attachments
+        .iter()
+        .filter(|a| a.kind == AttachmentKind::Text)
+    {
+        text.push_str(&format!(
+            "\n\n<attachment name=\"{}\">\n{}\n</attachment>",
+            file.name.replace('"', "'"),
+            file.text.as_deref().unwrap_or_default()
+        ));
+    }
+    let images: Vec<&str> = message
+        .attachments
+        .iter()
+        .filter(|a| a.kind == AttachmentKind::Image)
+        .filter_map(|a| a.data.as_deref())
+        .collect();
+    if !images.is_empty() && !vision {
+        let what = match images.len() {
+            1 => "An image was".to_owned(),
+            n => format!("{n} images were"),
+        };
+        text.push_str(&format!(
+            "\n\n({what} attached here, but this model can't see images.)"
+        ));
+    }
+    text.push_str(extra);
+    if images.is_empty() || !vision {
+        let left_out = if vision { 0 } else { images.len() };
+        return (ChatMessage::user(text), left_out);
+    }
+    let mut parts = vec![ContentPart::Text { text }];
+    parts.extend(images.into_iter().map(|url| ContentPart::ImageUrl {
+        image_url: ImageUrl {
+            url: url.to_owned(),
+        },
+    }));
+    (ChatMessage::user_parts(parts), 0)
+}
+
+/// Said once per reply when the newest message has images the model can't see.
+pub(crate) fn images_notice(run: &Run, model: &ResolvedModel, history: &[Message], vision: bool) {
+    let newest = history.iter().rev().find(|m| m.role == MessageRole::User);
+    let images = newest.map_or(0, |m| {
+        m.attachments
+            .iter()
+            .filter(|a| a.kind == AttachmentKind::Image)
+            .count()
+    });
+    if images > 0 && !vision {
+        let hint = match &model.endpoint {
+            Endpoint::Local { .. } => {
+                " Put the model's vision projector (an mmproj .gguf file) in its folder to use images."
+            }
+            Endpoint::Remote(_) => " Pick a model with vision to use images.",
+        };
+        run.emit(RunEvent::Notice {
+            level: "warning".into(),
+            text: format!(
+                "{} can't see images, so it got your text only.{hint}",
+                model.label
+            ),
+        });
+    }
+}
+
 pub(crate) fn apply_params(request: &mut ChatRequest, model: &ResolvedModel, params: &ChatParams) {
     request.sampling = Sampling {
         temperature: params.temperature,
@@ -1044,6 +1152,7 @@ fn build_request(
     model: &ResolvedModel,
     params: &ChatParams,
     web: Option<bool>,
+    vision: bool,
 ) -> ChatRequest {
     let base = session
         .persona
@@ -1084,7 +1193,7 @@ fn build_request(
         .rposition(|m| m.role == MessageRole::User);
     for (index, message) in view.messages.iter().enumerate() {
         match message.role {
-            MessageRole::User => messages.push(ChatMessage::user(message.content.as_str())),
+            MessageRole::User => messages.push(user_message(message, "", vision).0),
             MessageRole::Assistant => {
                 // Steps that searched or read keep their calls; their answers follow them.
                 let calls: Vec<ToolCall> = message

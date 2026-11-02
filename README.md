@@ -30,8 +30,8 @@ In development. Milestones:
 | M7  | Terminal panel                                              | done  |
 | M8  | Web search and fetch                                        | done  |
 | M9  | MCP servers                                                 | done  |
-| M10 | Attachments and images                                      | next  |
-| M11 | Polish, installer, docs                                     |       |
+| M10 | Attachments and images                                      | done  |
+| M11 | Polish, installer, docs                                     | next  |
 
 ## Development
 

@@ -21,7 +21,10 @@ use serde_json::Value;
 
 pub use checkpoints::Checkpoint;
 pub use connections::{Connection, ConnectionInput};
-pub use messages::{Message, MessageFinish, MessageRole, MessageStatus, NewMessage};
+pub use messages::{
+    Attachment, AttachmentKind, MAX_ATTACHMENT_CHARS, MAX_ATTACHMENTS, Message, MessageFinish,
+    MessageRole, MessageStatus, NewAttachment, NewMessage, check_attachments,
+};
 pub use projects::Project;
 pub use search::SearchHit;
 pub use sessions::{Mode, Session, SessionPatch, SessionSummary};

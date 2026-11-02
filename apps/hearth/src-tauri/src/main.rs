@@ -65,6 +65,7 @@ fn main() {
             chat_commands::sessions_list,
             chat_commands::session_create,
             chat_commands::session_get,
+            chat_commands::attachment_data,
             chat_commands::session_update,
             chat_commands::session_delete,
             chat_commands::branch_select,

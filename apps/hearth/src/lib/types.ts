@@ -232,6 +232,28 @@ export type McpStatus =
 /** An MCP server with its state and the last lines it wrote to stderr. */
 export type McpServer = McpServerConfig & { status: McpStatus; log: string[] };
 
+/** A file attached to a message. */
+export type AttachmentInfo = {
+  id: string;
+  kind: 'text' | 'image';
+  name: string;
+  mime: string;
+  /** The file's own size in bytes. */
+  size: number;
+  /** Characters of text (text files and PDFs). */
+  chars: number;
+};
+
+/** A file to attach: text already read (PDFs extracted), images resized to a data: URI. */
+export type NewAttachment = {
+  kind: 'text' | 'image';
+  name: string;
+  mime: string;
+  size: number;
+  text?: string;
+  data?: string;
+};
+
 /** A web search result. */
 export type WebHit = { title: string; url: string; snippet: string };
 
@@ -317,6 +339,8 @@ export type Message = {
   turn?: number;
   /** Summaries: the last message they stand in for. */
   coversUntil?: string | null;
+  /** User messages: attached files and images (contents load separately). */
+  attachments?: AttachmentInfo[];
   /** Coding sessions: an assistant message's tool calls, and a tool message's answer. */
   toolCalls?: ToolCall[] | null;
   toolCallId?: string | null;
@@ -392,7 +416,7 @@ export type RunEvent =
 export type RunEnvelope = RunEvent & { runId: string; seq: number };
 
 export type ChatAction =
-  | { kind: 'send'; text: string; web?: boolean }
+  | { kind: 'send'; text: string; web?: boolean; attachments?: NewAttachment[] }
   | { kind: 'regenerate'; messageId: string }
   | { kind: 'edit'; messageId: string; text: string };
 

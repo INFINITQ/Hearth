@@ -1,5 +1,5 @@
 ﻿import { type Page, expect, test } from '@playwright/test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type RunningApp, launchApp, trackViolations } from './app';
@@ -335,6 +335,100 @@ test('web search: set up in Settings, then a reply searches, reads and cites its
   await ui.getByText('Read pages on this PC and your network').scrollIntoViewIfNeeded();
   await ui.waitForTimeout(150);
   await ui.screenshot({ path: join(dir, 'm8-web-settings-dark.png') });
+});
+
+/** A one-page PDF saying `text` (Helvetica, with a proper cross-reference table). */
+function tinyPdf(text: string): Buffer {
+  const stream = `BT /F1 24 Tf 36 72 Td (${text}) Tj ET`;
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  let pdf = '%PDF-1.4\n';
+  const offsets: number[] = [];
+  objects.forEach((body, index) => {
+    offsets.push(pdf.length);
+    pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
+  });
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  pdf += offsets.map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('');
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(pdf, 'latin1');
+}
+
+/** A 1×1 PNG. */
+const DOT = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+test('attached files, a PDF and an image reach a model that can see', async () => {
+  await mock.setScript({
+    vision: true,
+    steps: [
+      {
+        expect: [
+          { last_user_contains: '<attachment name="groceries.md">' },
+          { last_user_contains: 'buy oranges' },
+          { last_user_contains: 'Hello from a PDF' },
+          { image_count: 1 },
+        ],
+        reply: { content: 'A shopping list, a one-line PDF and a single dot.' },
+      },
+    ],
+  });
+  const files = join(saveDir, 'files');
+  mkdirSync(files, { recursive: true });
+  writeFileSync(join(files, 'groceries.md'), '# Groceries\n\n- buy oranges\n');
+  writeFileSync(join(files, 'note.pdf'), tinyPdf('Hello from a PDF'));
+  writeFileSync(join(files, 'dot.png'), DOT);
+  const { page } = app;
+  await page
+    .getByLabel('Files to attach')
+    .setInputFiles(['groceries.md', 'note.pdf', 'dot.png'].map((name) => join(files, name)));
+  const draft = page.getByLabel('Files to send');
+  await expect(draft.locator('[data-file="note.pdf"]')).toContainText('PDF');
+  await expect(draft.locator('img[alt="dot.png"]')).toBeVisible();
+  await send(page, 'What are these?');
+  await expect(lastReply(page)).toContainText('A shopping list, a one-line PDF and a single dot.');
+
+  const sent = page.locator('[data-role="user"]').last();
+  await expect(sent.locator('[data-file="groceries.md"]')).toBeVisible();
+  await expect(sent.locator('[data-file="note.pdf"]')).toContainText('PDF');
+  await expect(sent.locator('img[data-image="dot.png"]')).toBeVisible();
+  await expect(page.getByLabel('Files to send')).toHaveCount(0);
+
+  const dir = join('test-results', 'screens');
+  mkdirSync(dir, { recursive: true });
+  for (const theme of ['light', 'dark'] as const) {
+    await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme);
+    await page.waitForTimeout(150);
+    await page.screenshot({ path: join(dir, `m10-attachments-${theme}.png`) });
+  }
+});
+
+test('a model that cannot see images gets the text, and the chat says why', async () => {
+  await mock.setScript({
+    steps: [
+      {
+        expect: [{ image_count: 0 }, { last_user_contains: "can't see images" }],
+        reply: { content: 'I only got your words.' },
+      },
+    ],
+  });
+  const files = join(saveDir, 'files');
+  mkdirSync(files, { recursive: true });
+  writeFileSync(join(files, 'dot.png'), DOT);
+  const { page } = app;
+  await page.getByLabel('Files to attach').setInputFiles(join(files, 'dot.png'));
+  await expect(page.getByLabel('Files to send').locator('img[alt="dot.png"]')).toBeVisible();
+  await send(page, 'Look at this.');
+  await expect(lastReply(page)).toContainText('I only got your words.');
+  await expect(page.getByRole('status')).toContainText("can't see images");
 });
 
 test('screenshots of a conversation in light and dark, for visual review', async () => {

@@ -16,6 +16,7 @@ import { useChat } from '../stores/chat';
 import { SummaryDivider } from './ContextMeter';
 import { Markdown } from './Markdown';
 import { ThinkingBlock } from './ThinkingBlock';
+import { AttachmentList } from './Attachments';
 import { Button, IconButton } from './ui/Button';
 import { Sources } from './WebActivity';
 
@@ -90,9 +91,12 @@ function UserMessage({ message }: { message: Message }) {
   if (editing) return <EditBox message={message} onDone={() => setEditing(false)} />;
   return (
     <div className="group flex flex-col items-end" data-role="user">
-      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-[18px] bg-surface-2 px-4 py-2.5 text-[15px] leading-[1.6] select-text">
-        {message.content}
-      </div>
+      <AttachmentList attachments={message.attachments ?? []} />
+      {message.content && (
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-[18px] bg-surface-2 px-4 py-2.5 text-[15px] leading-[1.6] select-text">
+          {message.content}
+        </div>
+      )}
       <div className="mt-1 flex items-center">
         <Versions message={message} />
         <div className="flex items-center opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100">

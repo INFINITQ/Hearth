@@ -268,6 +268,8 @@ struct Extras {
     note: String,
     /// On the newest tool result.
     reminder: Option<String>,
+    /// The model can see images (attached ones are sent).
+    vision: bool,
 }
 
 fn build_request(
@@ -294,11 +296,12 @@ fn build_request(
     for (index, message) in history.iter().enumerate() {
         match message.role {
             MessageRole::User => {
-                let mut text = message.content.clone();
-                if Some(index) == last_user {
-                    text.push_str(&extras.note);
-                }
-                messages.push(ChatMessage::user(text));
+                let note = if Some(index) == last_user {
+                    extras.note.as_str()
+                } else {
+                    ""
+                };
+                messages.push(chat::user_message(message, note, extras.vision).0);
             }
             MessageRole::Assistant => {
                 let calls: Vec<ToolCall> = message
@@ -417,6 +420,17 @@ impl Agent {
         text: &str,
         sink: Arc<dyn RunSink>,
     ) -> Result<StartedRun, ChatError> {
+        self.start_with(session_id, text, Vec::new(), sink)
+    }
+
+    /// Starts a task with files or images attached.
+    pub fn start_with(
+        &self,
+        session_id: &str,
+        text: &str,
+        attachments: Vec<crate::store::NewAttachment>,
+        sink: Arc<dyn RunSink>,
+    ) -> Result<StartedRun, ChatError> {
         let inner = &self.0;
         let session = inner.store.session(session_id)?;
         if session.mode != Mode::Code {
@@ -432,9 +446,10 @@ impl Agent {
             .resolve(&model_ref)
             .map_err(ChatError::Model)?;
         let text = text.trim();
-        if text.is_empty() {
+        if text.is_empty() && attachments.is_empty() {
             return Err(ChatError::Invalid("Describe the task first.".into()));
         }
+        crate::store::check_attachments(&attachments)?;
         let turn = inner
             .store
             .active_path(&session.id)?
@@ -450,7 +465,14 @@ impl Agent {
             .map_err(ChatError::Busy)?;
         let mut new = NewMessage::user(&session.id, session.active_leaf_id.as_deref(), text);
         new.turn = turn;
-        let user = match inner.store.insert_message(new) {
+        let saved = inner.store.insert_message(new).and_then(|user| {
+            if attachments.is_empty() {
+                return Ok(user);
+            }
+            inner.store.add_attachments(&user.id, &attachments)?;
+            inner.store.message(&user.id)
+        });
+        let user = match saved {
             Ok(user) => user,
             Err(err) => {
                 inner.runs.finish(&run.id);
@@ -706,10 +728,14 @@ impl Agent {
         let mut todos = latest_todos(&history);
         let mut repeats = Repeats::default();
         // The model's context window (a local model's setting, or what its server reports).
-        let mut window = match job.model.connect(run).await {
-            Ok(client) => job.model.window(&client).await,
-            Err(_) => None,
+        let (mut window, vision) = match job.model.connect(run).await {
+            Ok(client) => (
+                job.model.window(&client).await,
+                job.model.vision(&client).await,
+            ),
+            Err(_) => (None, true),
         };
+        chat::images_notice(run, job.model, &history, vision);
         let mut compact_now = false;
         let mut overflowed = false;
 
@@ -745,6 +771,7 @@ impl Agent {
             let extras = Extras {
                 note,
                 reminder: todo_reminder(step, &todos),
+                vision,
             };
             let request = build_request(&system, &history, job.model, &defs, &params, extras);
             let mut new = NewMessage::assistant(&job.session.id, Some(&leaf), &job.model.label);

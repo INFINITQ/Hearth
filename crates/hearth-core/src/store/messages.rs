@@ -93,7 +93,59 @@ pub struct Message {
     pub created_at: i64,
     /// Summaries: the last message they stand in for.
     pub covers_until: Option<String>,
+    /// Files and images attached to a user message.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AttachmentKind {
+    /// A text or code file, or a PDF's text.
+    Text,
+    Image,
+}
+
+/// A file attached to a message. Its contents stay in Rust (the UI fetches an image when it
+/// shows it), so transcripts stay light.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attachment {
+    pub id: String,
+    pub kind: AttachmentKind,
+    pub name: String,
+    pub mime: String,
+    /// The file's own size in bytes.
+    pub size: i64,
+    /// Characters of text (text files and PDFs).
+    pub chars: i64,
+    #[serde(skip_serializing)]
+    pub text: Option<String>,
+    /// Images: a `data:` URI.
+    #[serde(skip_serializing)]
+    pub data: Option<String>,
+}
+
+/// A file the user attaches (from the UI: text already extracted, images resized).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewAttachment {
+    pub kind: AttachmentKind,
+    pub name: String,
+    pub mime: String,
+    pub size: i64,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub data: Option<String>,
+}
+
+/// At most this many files on one message.
+pub const MAX_ATTACHMENTS: usize = 10;
+/// A file's text is cut here (about 100,000 tokens).
+pub const MAX_ATTACHMENT_CHARS: usize = 400_000;
+/// An image's data URI, at most.
+const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct NewMessage {
@@ -257,7 +309,131 @@ fn row_to_message(row: &Row) -> rusqlite::Result<Message> {
         usage: from_json(row.get(18)?),
         created_at: row.get(19)?,
         covers_until: row.get(20)?,
+        attachments: Vec::new(),
     })
+}
+
+fn row_to_attachment(row: &Row) -> rusqlite::Result<(String, Attachment)> {
+    let kind: String = row.get(2)?;
+    let text: Option<String> = row.get(6)?;
+    Ok((
+        row.get(1)?,
+        Attachment {
+            id: row.get(0)?,
+            kind: if kind == "image" {
+                AttachmentKind::Image
+            } else {
+                AttachmentKind::Text
+            },
+            name: row.get(3)?,
+            mime: row.get(4)?,
+            size: row.get(5)?,
+            chars: text.as_deref().map_or(0, |t| t.chars().count() as i64),
+            text,
+            data: row.get(7)?,
+        },
+    ))
+}
+
+const ATTACHMENT_COLUMNS: &str = "id, message_id, kind, name, mime, size, text, data";
+
+/// Root to `leaf`, with attachments.
+fn path_in(conn: &Connection, leaf: &str) -> Result<Vec<Message>> {
+    let mut statement = conn.prepare(&format!(
+        "WITH RECURSIVE path(id, depth) AS (
+           SELECT id, 0 FROM messages WHERE id = ?1
+           UNION ALL
+           SELECT m.parent_id, p.depth + 1 FROM messages m JOIN path p ON m.id = p.id
+           WHERE m.parent_id IS NOT NULL
+         )
+         SELECT {COLUMNS} FROM messages JOIN path USING (id) ORDER BY path.depth DESC"
+    ))?;
+    let rows = statement.query_map([leaf], row_to_message)?;
+    let mut messages: Vec<Message> = rows.collect::<rusqlite::Result<_>>()?;
+    with_attachments(conn, &mut messages)?;
+    Ok(messages)
+}
+
+/// Fills in the user messages' attachments.
+fn with_attachments(conn: &Connection, messages: &mut [Message]) -> Result<()> {
+    let ids: Vec<&str> = messages
+        .iter()
+        .filter(|m| m.role == MessageRole::User)
+        .map(|m| m.id.as_str())
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let marks = vec!["?"; ids.len()].join(", ");
+    let mut statement = conn.prepare(&format!(
+        "SELECT {ATTACHMENT_COLUMNS} FROM attachments WHERE message_id IN ({marks}) ORDER BY position"
+    ))?;
+    let rows = statement.query_map(rusqlite::params_from_iter(ids.iter()), row_to_attachment)?;
+    let mut found: std::collections::HashMap<String, Vec<Attachment>> = Default::default();
+    for row in rows {
+        let (message_id, attachment) = row?;
+        found.entry(message_id).or_default().push(attachment);
+    }
+    for message in messages {
+        if let Some(attachments) = found.remove(&message.id) {
+            message.attachments = attachments;
+        }
+    }
+    Ok(())
+}
+
+impl Attachment {
+    /// The same file, to attach again (an edited message keeps its files).
+    pub fn to_new(&self) -> NewAttachment {
+        NewAttachment {
+            kind: self.kind,
+            name: self.name.clone(),
+            mime: self.mime.clone(),
+            size: self.size,
+            text: self.text.clone(),
+            data: self.data.clone(),
+        }
+    }
+}
+
+/// Checks files before a message is saved with them.
+pub fn check_attachments(attachments: &[NewAttachment]) -> Result<()> {
+    if attachments.len() > MAX_ATTACHMENTS {
+        return Err(StoreError::Invalid(format!(
+            "At most {MAX_ATTACHMENTS} files can go with one message."
+        )));
+    }
+    attachments.iter().try_for_each(|a| checked(a).map(|_| ()))
+}
+
+/// Checks what the UI sent, cutting text that's too long.
+fn checked(attachment: &NewAttachment) -> Result<NewAttachment> {
+    let invalid = |why: &str| StoreError::Invalid(format!("{}: {why}", attachment.name));
+    let mut attachment = attachment.clone();
+    match attachment.kind {
+        AttachmentKind::Text => {
+            let text = attachment.text.take().ok_or_else(|| invalid("no text"))?;
+            let text = match text.char_indices().nth(MAX_ATTACHMENT_CHARS) {
+                Some((cut, _)) => {
+                    format!("{}\n… (the rest of this file was left out)", &text[..cut])
+                }
+                None => text,
+            };
+            attachment.text = Some(text);
+            attachment.data = None;
+        }
+        AttachmentKind::Image => {
+            let data = attachment.data.as_deref().unwrap_or_default();
+            if !data.starts_with("data:image/") {
+                return Err(invalid("not an image"));
+            }
+            if data.len() > MAX_IMAGE_BYTES {
+                return Err(invalid("the image is too big"));
+            }
+            attachment.text = None;
+        }
+    }
+    Ok(attachment)
 }
 
 fn message_in(conn: &Connection, id: &str) -> Result<Message> {
@@ -388,7 +564,69 @@ impl Store {
     }
 
     pub fn message(&self, id: &str) -> Result<Message> {
-        message_in(&self.conn(), id)
+        let conn = self.conn();
+        let mut message = [message_in(&conn, id)?];
+        with_attachments(&conn, &mut message)?;
+        let [message] = message;
+        Ok(message)
+    }
+
+    /// Saves files attached to a (user) message, in order.
+    pub fn add_attachments(
+        &self,
+        message_id: &str,
+        attachments: &[NewAttachment],
+    ) -> Result<Vec<Attachment>> {
+        if attachments.len() > MAX_ATTACHMENTS {
+            return Err(StoreError::Invalid(format!(
+                "At most {MAX_ATTACHMENTS} files can go with one message."
+            )));
+        }
+        let checked: Vec<NewAttachment> = attachments.iter().map(checked).collect::<Result<_>>()?;
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        message_in(&tx, message_id)?;
+        for (position, attachment) in checked.iter().enumerate() {
+            let kind = match attachment.kind {
+                AttachmentKind::Text => "text",
+                AttachmentKind::Image => "image",
+            };
+            tx.execute(
+                "INSERT INTO attachments (id, message_id, position, kind, name, mime, size, text, data, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    new_id(),
+                    message_id,
+                    position as i64,
+                    kind,
+                    attachment.name.trim(),
+                    attachment.mime,
+                    attachment.size,
+                    attachment.text,
+                    attachment.data,
+                    now_ms()
+                ],
+            )?;
+        }
+        tx.commit()?;
+        // Read back on the same connection (its lock is still held).
+        let mut saved = [message_in(&conn, message_id)?];
+        with_attachments(&conn, &mut saved)?;
+        let [saved] = saved;
+        Ok(saved.attachments)
+    }
+
+    /// One attachment with its contents.
+    pub fn attachment(&self, id: &str) -> Result<Attachment> {
+        self.conn()
+            .query_row(
+                &format!("SELECT {ATTACHMENT_COLUMNS} FROM attachments WHERE id = ?1"),
+                [id],
+                row_to_attachment,
+            )
+            .optional()?
+            .map(|(_, attachment)| attachment)
+            .ok_or(StoreError::NotFound("attachment"))
     }
 
     /// The conversation as shown: root to active leaf.
@@ -397,34 +635,14 @@ impl Store {
         let Some(leaf) = session_in(&conn, session_id)?.active_leaf_id else {
             return Ok(Vec::new());
         };
-        let mut statement = conn.prepare(&format!(
-            "WITH RECURSIVE path(id, depth) AS (
-               SELECT id, 0 FROM messages WHERE id = ?1
-               UNION ALL
-               SELECT m.parent_id, p.depth + 1 FROM messages m JOIN path p ON m.id = p.id
-               WHERE m.parent_id IS NOT NULL
-             )
-             SELECT {COLUMNS} FROM messages JOIN path USING (id) ORDER BY path.depth DESC"
-        ))?;
-        let rows = statement.query_map([leaf], row_to_message)?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        path_in(&conn, &leaf)
     }
 
     /// The messages from the root down to `message_id` (inclusive).
     pub fn path_to(&self, message_id: &str) -> Result<Vec<Message>> {
         let conn = self.conn();
         message_in(&conn, message_id)?;
-        let mut statement = conn.prepare(&format!(
-            "WITH RECURSIVE path(id, depth) AS (
-               SELECT id, 0 FROM messages WHERE id = ?1
-               UNION ALL
-               SELECT m.parent_id, p.depth + 1 FROM messages m JOIN path p ON m.id = p.id
-               WHERE m.parent_id IS NOT NULL
-             )
-             SELECT {COLUMNS} FROM messages JOIN path USING (id) ORDER BY path.depth DESC"
-        ))?;
-        let rows = statement.query_map([message_id], row_to_message)?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        path_in(&conn, message_id)
     }
 
     /// The versions of a message: it and its siblings (same parent), oldest first.

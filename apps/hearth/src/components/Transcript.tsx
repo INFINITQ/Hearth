@@ -1,9 +1,9 @@
-import { ArrowDown, TriangleAlert, X } from 'lucide-react';
+import { ArrowDown, Info, TriangleAlert, X } from 'lucide-react';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { answersByStep, webTurns } from '../lib/toolCalls';
 import { useApp } from '../stores/app';
 import { useChat } from '../stores/chat';
-import type { LiveRun } from '../lib/runReducer';
+import type { LiveRun, RunNotice } from '../lib/runReducer';
 import { MessageView, ModelLoadingLine, ProgressLine, TypingDots } from './MessageView';
 import { Button, IconButton } from './ui/Button';
 import { WebSteps } from './WebActivity';
@@ -12,6 +12,7 @@ import { WebSteps } from './WebActivity';
 export function Transcript() {
   const messages = useChat((s) => s.messages);
   const run = useChat((s) => s.run);
+  const notice = useChat((s) => s.notice);
   const steps = useMemo(() => answersByStep(messages), [messages]);
   const turns = useMemo(() => webTurns(messages), [messages]);
   const box = useRef<HTMLDivElement>(null);
@@ -66,6 +67,7 @@ export function Transcript() {
             );
           })}
           {run && <BeforeReply run={run} />}
+          {notice && <NoticeBanner notice={notice} />}
           <RunErrorBanner />
         </div>
       </div>
@@ -102,6 +104,31 @@ export function Waiting({ progress }: { progress: { processed: number; total: nu
     return <p className="text-[13px] text-text-3">Reading the conversation… {percent}%</p>;
   }
   return <TypingDots />;
+}
+
+/** Something a run wants the user to know (an image the model can't see, a paused task). */
+export function NoticeBanner({ notice }: { notice: RunNotice }) {
+  const warning = notice.level === 'warning';
+  return (
+    <div
+      role="status"
+      className={
+        warning
+          ? 'flex items-start gap-2.5 rounded-card bg-accent-soft px-4 py-3 text-[13.5px] text-accent-text'
+          : 'flex items-start gap-2.5 rounded-card bg-surface-2 px-4 py-3 text-[13.5px] text-text-2'
+      }
+    >
+      {warning ? (
+        <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+      ) : (
+        <Info className="mt-0.5 size-4 shrink-0" />
+      )}
+      <p className="min-w-0 flex-1 select-text">{notice.text}</p>
+      <IconButton label="Dismiss" onClick={() => useChat.getState().dismissNotice()}>
+        <X />
+      </IconButton>
+    </div>
+  );
 }
 
 /** Problems starting a reply (no model chosen, server down): shown where the reply would be. */

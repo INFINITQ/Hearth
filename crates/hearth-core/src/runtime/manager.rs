@@ -390,6 +390,22 @@ impl Runtime {
         Some(context_for(&model, &preset))
     }
 
+    /// Whether a model can see images: it has a vision projector (mmproj) and its preset
+    /// loads it.
+    pub fn vision(&self, model_id: &str) -> Option<bool> {
+        let model = self.model(model_id)?;
+        let preset = self
+            .0
+            .settings
+            .get()
+            .runtime
+            .presets
+            .get(model_id)
+            .cloned()
+            .unwrap_or_default();
+        Some(preset.vision && model.mmproj.is_some())
+    }
+
     pub fn is_ready(&self, model_id: &str) -> bool {
         lock(&self.0.servers)
             .get(model_id)

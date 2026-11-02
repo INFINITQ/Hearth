@@ -1,15 +1,16 @@
-import { ArrowDown, Info, LoaderCircle, TriangleAlert, Undo2, X } from 'lucide-react';
+import { ArrowDown, LoaderCircle, TriangleAlert, Undo2 } from 'lucide-react';
 import { AlertDialog } from 'radix-ui';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { LiveRun, RunNotice } from '../../lib/runReducer';
+import type { LiveRun } from '../../lib/runReducer';
 import { answersByStep } from '../../lib/toolCalls';
 import type { Message, ToolCall } from '../../lib/types';
 import { useChat } from '../../stores/chat';
+import { AttachmentList } from '../Attachments';
 import { SummaryDivider } from '../ContextMeter';
 import { Markdown } from '../Markdown';
 import { CopyButton, stats } from '../MessageView';
 import { ThinkingBlock } from '../ThinkingBlock';
-import { RunErrorBanner } from '../Transcript';
+import { NoticeBanner, RunErrorBanner } from '../Transcript';
 import { Button, IconButton } from '../ui/Button';
 import { type CallState, ToolCard } from './ToolCard';
 import { PermissionCard } from './PermissionCard';
@@ -120,9 +121,12 @@ function UserTask({ message, undoable }: { message: Message; undoable: boolean }
   const [confirming, setConfirming] = useState(false);
   return (
     <div className="group flex flex-col items-end pt-1" data-role="user">
-      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-[18px] bg-surface-2 px-4 py-2.5 text-[15px] leading-[1.6] select-text">
-        {message.content}
-      </div>
+      <AttachmentList attachments={message.attachments ?? []} />
+      {message.content && (
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-[18px] bg-surface-2 px-4 py-2.5 text-[15px] leading-[1.6] select-text">
+          {message.content}
+        </div>
+      )}
       <div className="mt-1 flex items-center opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100">
         <CopyButton text={message.content} />
         {undoable && (
@@ -271,30 +275,6 @@ function LiveStatus({ run, messages }: { run: LiveRun | null; messages: Message[
     <div className="flex items-center gap-2 px-2 text-[13px] text-text-2" aria-live="polite">
       <LoaderCircle className="size-3.5 animate-spin text-accent" />
       <span className="thinking-shimmer">{text}</span>
-    </div>
-  );
-}
-
-function NoticeBanner({ notice }: { notice: RunNotice }) {
-  const warning = notice.level === 'warning';
-  return (
-    <div
-      role="status"
-      className={
-        warning
-          ? 'flex items-start gap-2.5 rounded-card bg-accent-soft px-4 py-3 text-[13.5px] text-accent-text'
-          : 'flex items-start gap-2.5 rounded-card bg-surface-2 px-4 py-3 text-[13.5px] text-text-2'
-      }
-    >
-      {warning ? (
-        <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-      ) : (
-        <Info className="mt-0.5 size-4 shrink-0" />
-      )}
-      <p className="min-w-0 flex-1 select-text">{notice.text}</p>
-      <IconButton label="Dismiss" onClick={() => useChat.getState().dismissNotice()}>
-        <X />
-      </IconButton>
     </div>
   );
 }

@@ -46,6 +46,9 @@ pub fn create_main(app: &AppHandle<Wry>, data_dir: &Path) -> Result<()> {
         .incognito(true)
         .general_autofill_enabled(false)
         .zoom_hotkeys_enabled(false)
+        // Files dropped on the window reach the page (the composer attaches them) instead of
+        // Tauri's own handler.
+        .disable_drag_drop_handler()
         .initialization_script(INIT_SCRIPT)
         .initialization_script(format!("window.__HEARTH_BOOT__ = Object.freeze({boot});"))
         .on_navigation(crate::guard::allow_navigation)

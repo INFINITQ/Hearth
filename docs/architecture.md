@@ -152,6 +152,24 @@ over a server's stdin/stdout or Streamable HTTP (JSON or SSE answers, the sessio
   tool here" (saved per project, like command rules). Results are read as text (images and
   other content are described), cut at 40,000 characters.
 
+## Attachments
+
+Chat messages and coding tasks can carry up to 10 files: text and code files, PDFs and images.
+
+- **Reading** happens in the UI (`lib/attachments.ts`): text files as text, a PDF's text with
+  pdf.js (loaded only when a PDF is attached; its worker comes from the app itself), and images
+  scaled down to 1,568 pixels on the long side (PNGs stay PNG, the rest become JPEG). Files can
+  be picked, dropped on the composer (Tauri's own drop handler is off for this) or pasted.
+- **Saving:** Rust keeps them in the `attachments` table (migration 5), checked (images must be
+  `data:image/` URIs, text is cut at 400,000 characters). Messages carry only names, kinds and
+  sizes; the transcript loads an image when it shows it (`attachment_data`). An edited message
+  keeps its files.
+- **Sending:** attached text goes into the user's message as `<attachment name="…">` blocks.
+  Images go as `image_url` parts when the model can see them: a local model with its vision
+  projector (mmproj) loaded, or what a llama.cpp server's `/props` reports. Otherwise the
+  model is told an image was attached, and the chat shows why it wasn't sent. Context
+  estimates count attached text, and about 800 tokens per image.
+
 ## Context management (`hearth-core/src/context.rs`)
 
 Chats and coding tasks keep their requests inside the model's context window.

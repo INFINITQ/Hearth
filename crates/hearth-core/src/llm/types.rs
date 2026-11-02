@@ -115,6 +115,10 @@ impl ChatMessage {
     pub fn user(text: impl Into<String>) -> Self {
         Self::new(Role::User, Some(Content::Text(text.into())))
     }
+    /// A user message with images (for vision models).
+    pub fn user_parts(parts: Vec<ContentPart>) -> Self {
+        Self::new(Role::User, Some(Content::Parts(parts)))
+    }
     pub fn assistant(text: impl Into<String>) -> Self {
         Self::new(Role::Assistant, Some(Content::Text(text.into())))
     }

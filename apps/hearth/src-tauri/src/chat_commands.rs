@@ -126,6 +126,22 @@ pub async fn session_get(
     session_view(&store, &runs, &id)
 }
 
+/// An attachment's contents (transcripts carry only names; images load when shown).
+#[derive(Serialize)]
+pub struct AttachmentData {
+    text: Option<String>,
+    data: Option<String>,
+}
+
+#[tauri::command]
+pub async fn attachment_data(store: State<'_, Arc<Store>>, id: String) -> Result<AttachmentData> {
+    let attachment = store.attachment(&id)?;
+    Ok(AttachmentData {
+        text: attachment.text,
+        data: attachment.data,
+    })
+}
+
 #[tauri::command]
 pub async fn session_update(
     app: AppHandle<Wry>,
@@ -332,7 +348,9 @@ pub async fn run_start(
     let started = match store.session(&args.session_id)?.mode {
         Mode::Chat => chat.start(&args.session_id, args.action, sink)?,
         Mode::Code => match args.action {
-            ChatAction::Send { text, .. } => agent.start(&args.session_id, &text, sink)?,
+            ChatAction::Send {
+                text, attachments, ..
+            } => agent.start_with(&args.session_id, &text, attachments, sink)?,
             _ => {
                 return Err(Error::Invalid(
                     "Editing or regenerating earlier messages isn't available in coding sessions yet."

@@ -162,6 +162,7 @@ async fn models_load_swap_fail_and_chat() {
         ChatAction::Send {
             text: "Hi".into(),
             web: None,
+            attachments: Vec::new(),
         },
         sink.clone(),
     )

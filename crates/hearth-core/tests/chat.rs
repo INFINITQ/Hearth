@@ -7,7 +7,10 @@ use std::time::Duration;
 use hearth_core::chat::{Chat, ChatAction, ChatError, StoreResolver};
 use hearth_core::runs::{CollectSink, RunEnd, RunEvent, RunManager};
 use hearth_core::settings::SettingsStore;
-use hearth_core::store::{ConnectionInput, MessageRole, MessageStatus, Mode, SessionPatch, Store};
+use hearth_core::store::{
+    AttachmentKind, ConnectionInput, MessageRole, MessageStatus, Mode, NewAttachment, SessionPatch,
+    Store,
+};
 use hearth_testkit::{Expect, Fault, MockServer, Reply, Script};
 use serde_json::json;
 
@@ -92,6 +95,7 @@ fn send(text: &str) -> ChatAction {
     ChatAction::Send {
         text: text.into(),
         web: None,
+        attachments: Vec::new(),
     }
 }
 
@@ -356,6 +360,7 @@ async fn long_chats_are_summarized_to_fit_the_window() {
             ChatAction::Send {
                 text: long,
                 web: None,
+                attachments: Vec::new(),
             },
             sink.clone(),
         )
@@ -369,6 +374,7 @@ async fn long_chats_are_summarized_to_fit_the_window() {
             ChatAction::Send {
                 text: "What did I send?".into(),
                 web: None,
+                attachments: Vec::new(),
             },
             sink.clone(),
         )
@@ -441,6 +447,7 @@ async fn web_search_in_a_chat_searches_reads_and_then_answers() {
             ChatAction::Send {
                 text: "When does Hearth 1.0 ship?".into(),
                 web: Some(true),
+                attachments: Vec::new(),
             },
             sink.clone(),
         )
@@ -495,6 +502,7 @@ async fn chats_dont_read_pages_on_this_pc_unless_allowed() {
             ChatAction::Send {
                 text: "Read my router's page".into(),
                 web: Some(true),
+                attachments: Vec::new(),
             },
             sink.clone(),
         )
@@ -508,4 +516,132 @@ async fn chats_dont_read_pages_on_this_pc_unless_allowed() {
     let path = h.store.active_path(&session.id).unwrap();
     assert_eq!(path[2].tool_status.as_deref(), Some("error"));
     assert_eq!(path.last().unwrap().content, "I couldn't read that page.");
+}
+
+/// A 1×1 PNG.
+const PIXEL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+fn files() -> Vec<NewAttachment> {
+    vec![
+        NewAttachment {
+            kind: AttachmentKind::Text,
+            name: "notes.txt".into(),
+            mime: "text/plain".into(),
+            size: 11,
+            text: Some("buy oranges".into()),
+            data: None,
+        },
+        NewAttachment {
+            kind: AttachmentKind::Image,
+            name: "dot.png".into(),
+            mime: "image/png".into(),
+            size: 68,
+            text: None,
+            data: Some(PIXEL.into()),
+        },
+    ]
+}
+
+async fn send_files(h: &Harness, session_id: &str) -> Arc<CollectSink> {
+    let sink = Arc::new(CollectSink::default());
+    h.chat
+        .start(
+            session_id,
+            ChatAction::Send {
+                text: "What are these?".into(),
+                web: None,
+                attachments: files(),
+            },
+            sink.clone(),
+        )
+        .unwrap();
+    sink
+}
+
+#[tokio::test]
+async fn attached_files_and_images_reach_a_model_that_can_see() {
+    let mut script = Script::new().expect_then(
+        vec![
+            Expect::LastUserContains("<attachment name=\"notes.txt\">\nbuy oranges".into()),
+            Expect::ImageCount(1),
+        ],
+        Reply::text("A list and a dot."),
+    );
+    script.vision = true;
+    let h = harness(script).await;
+    let session = h.store.create_session(Mode::Chat, None).unwrap();
+    let sink = send_files(&h, &session.id).await;
+    assert_eq!(
+        wait_finished(&sink).await,
+        RunEnd::Completed,
+        "{:#?}",
+        sink.events()
+    );
+
+    let path = h.store.active_path(&session.id).unwrap();
+    let names: Vec<&str> = path[0]
+        .attachments
+        .iter()
+        .map(|a| a.name.as_str())
+        .collect();
+    assert_eq!(names, ["notes.txt", "dot.png"]);
+    assert_eq!(path[0].attachments[0].chars, 11);
+    // The UI gets what was attached, not the contents.
+    let shown = serde_json::to_value(&path[0]).unwrap();
+    assert!(shown["attachments"][1].get("data").is_none());
+    let image = h.store.attachment(&path[0].attachments[1].id).unwrap();
+    assert_eq!(image.data.as_deref(), Some(PIXEL));
+    assert!(
+        !sink
+            .events()
+            .iter()
+            .any(|e| matches!(e, RunEvent::Notice { .. }))
+    );
+}
+
+#[tokio::test]
+async fn a_model_that_cant_see_gets_the_text_and_the_user_hears_why() {
+    let script = Script::new().expect_then(
+        vec![
+            Expect::ImageCount(0),
+            Expect::LastUserContains("this model can't see images".into()),
+        ],
+        Reply::text("I can't see it, but the note says oranges."),
+    );
+    let h = harness(script).await;
+    let session = h.store.create_session(Mode::Chat, None).unwrap();
+    let sink = send_files(&h, &session.id).await;
+    assert_eq!(
+        wait_finished(&sink).await,
+        RunEnd::Completed,
+        "{:#?}",
+        sink.events()
+    );
+    assert!(sink.events().iter().any(|e| matches!(
+        e,
+        RunEvent::Notice { level, text } if level == "warning" && text.contains("can't see images")
+    )));
+}
+
+#[tokio::test]
+async fn too_many_or_broken_attachments_are_refused_before_anything_is_saved() {
+    let h = harness(Script::new()).await;
+    let session = h.store.create_session(Mode::Chat, None).unwrap();
+    let send = |attachments: Vec<NewAttachment>| {
+        h.chat.start(
+            &session.id,
+            ChatAction::Send {
+                text: "Hi".into(),
+                web: None,
+                attachments,
+            },
+            Arc::new(CollectSink::default()),
+        )
+    };
+    let many: Vec<NewAttachment> = (0..11).map(|_| files()[0].clone()).collect();
+    assert!(matches!(send(many), Err(ChatError::Store(_))));
+    let mut broken = files()[1].clone();
+    broken.data = Some("not an image".into());
+    assert!(send(vec![broken]).is_err());
+    assert!(h.store.active_path(&session.id).unwrap().is_empty());
 }

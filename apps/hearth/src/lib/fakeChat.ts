@@ -240,6 +240,7 @@ export function fakeChat(): ChatBackend {
         .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt),
     sessionCreate: async (mode) => newSession(mode),
     sessionGet: async (id) => view(id),
+    attachmentData: async () => ({ text: null, data: null }),
     sessionUpdate: async (id, patch) => {
       const session = sessions.get(id);
       if (!session) throw { kind: 'invalid', message: 'Not found' };

@@ -6,7 +6,7 @@
 //! word for word, and a cut never separates a tool call from its result.
 
 use crate::llm::{ChatMessage, ChatRequest, LlmClient, LlmError};
-use crate::store::{Message, MessageRole};
+use crate::store::{AttachmentKind, Message, MessageRole};
 
 /// Compact when the conversation uses more than this share of the window.
 pub const COMPACT_AT: f64 = 0.8;
@@ -65,11 +65,24 @@ pub fn estimate(message: &Message) -> u64 {
         .tool_calls
         .as_ref()
         .map_or(0, |calls| calls.to_string().len() as u64 / 4);
+    // Attached files count as their text; images as what vision models usually spend on one.
+    let attached: u64 = message
+        .attachments
+        .iter()
+        .map(|a| match a.kind {
+            AttachmentKind::Text => (a.chars as u64).div_ceil(4),
+            AttachmentKind::Image => IMAGE_TOKENS,
+        })
+        .sum();
     estimate_text(&message.content)
         + message.reasoning.as_deref().map_or(0, estimate_text)
         + calls
+        + attached
         + 8
 }
+
+/// Roughly what one image takes in a vision model's context.
+const IMAGE_TOKENS: u64 = 800;
 
 /// Tokens a reply reported for its whole conversation (prompt and reply).
 pub fn usage_total(message: &Message) -> Option<u64> {
@@ -162,7 +175,18 @@ pub fn render(messages: &[Message], max_chars: usize) -> String {
     let mut parts: Vec<String> = Vec::new();
     for message in messages {
         let text = match message.role {
-            MessageRole::User => format!("User: {}", shorten(&message.content, MESSAGE_CHARS)),
+            MessageRole::User => {
+                let mut text = format!("User: {}", shorten(&message.content, MESSAGE_CHARS));
+                if !message.attachments.is_empty() {
+                    let names: Vec<&str> = message
+                        .attachments
+                        .iter()
+                        .map(|a| a.name.as_str())
+                        .collect();
+                    text.push_str(&format!("\n  (attached: {})", names.join(", ")));
+                }
+                text
+            }
             MessageRole::Assistant => {
                 let mut text = format!("Assistant: {}", shorten(&message.content, MESSAGE_CHARS));
                 if let Some(calls) = message.tool_calls.as_ref().and_then(|c| c.as_array()) {
@@ -272,6 +296,7 @@ mod tests {
             usage: None,
             created_at: 0,
             covers_until: None,
+            attachments: Vec::new(),
         }
     }
 

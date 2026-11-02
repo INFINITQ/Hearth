@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { imageCache } from '../lib/attachments';
 import { backend, errorMessage } from '../lib/backend';
 import {
   type LiveRun,
@@ -9,12 +10,14 @@ import {
   withLiveText,
 } from '../lib/runReducer';
 import type {
+  AttachmentInfo,
   ChatAction,
   ChatParams,
   FileChange,
   Message,
   Mode,
   ModelRef,
+  NewAttachment,
   PermissionChoice,
   PermissionMode,
   Project,
@@ -63,7 +66,7 @@ type ChatState = {
   cancelTrust(): void;
   open(id: string): Promise<void>;
   newChat(): void;
-  send(text: string, mode: Mode): Promise<void>;
+  send(text: string, mode: Mode, attachments?: NewAttachment[]): Promise<void>;
   stop(): void;
   regenerate(messageId: string): Promise<void>;
   edit(messageId: string, text: string): Promise<void>;
@@ -127,8 +130,26 @@ async function refresh(id: string) {
   useChat.setState({ session: view.session, messages: withLiveText(view.messages, run) });
 }
 
-function pendingUser(sessionId: string, text: string, parentId: string | null): Message {
+function pendingUser(
+  sessionId: string,
+  text: string,
+  parentId: string | null,
+  files: NewAttachment[],
+): Message {
   const id = `pending-${Date.now()}`;
+  // Shown right away; images come from what was just read (the saved ones load later).
+  const attachments: AttachmentInfo[] = files.map((file, index) => {
+    const info = {
+      id: `${id}-${index}`,
+      kind: file.kind,
+      name: file.name,
+      mime: file.mime,
+      size: file.size,
+      chars: file.text?.length ?? 0,
+    };
+    if (file.data) imageCache.set(info.id, file.data);
+    return info;
+  });
   return {
     id,
     sessionId,
@@ -144,6 +165,7 @@ function pendingUser(sessionId: string, text: string, parentId: string | null): 
     usage: null,
     createdAt: Date.now(),
     versions: { index: 0, ids: [id] },
+    attachments,
   };
 }
 
@@ -281,7 +303,7 @@ export const useChat = create<ChatState>()((set, get) => ({
       changesOpen: false,
     }),
 
-  send: async (text, mode) => {
+  send: async (text, mode, attachments = []) => {
     const live = get().run;
     if (mode === 'code' && live?.runId && get().session?.id === live.sessionId) {
       // The agent is working: the message joins before its next step.
@@ -313,10 +335,14 @@ export const useChat = create<ChatState>()((set, get) => ({
       set({ session, messages: [], draft: NO_DRAFT });
     }
     const leaf = get().messages.at(-1)?.id ?? null;
-    set({ messages: [...get().messages, pendingUser(session.id, text.trim(), leaf)] });
+    set({
+      messages: [...get().messages, pendingUser(session.id, text.trim(), leaf, attachments)],
+    });
     await startRun(
       session.id,
-      mode === 'chat' ? { kind: 'send', text, web: get().web } : { kind: 'send', text },
+      mode === 'chat'
+        ? { kind: 'send', text, web: get().web, attachments }
+        : { kind: 'send', text, attachments },
     );
   },
 
@@ -338,12 +364,12 @@ export const useChat = create<ChatState>()((set, get) => ({
     const index = get().messages.findIndex((m) => m.id === messageId);
     const original = get().messages[index];
     if (original) {
-      set({
-        messages: [
-          ...get().messages.slice(0, index),
-          pendingUser(session.id, text.trim(), original.parentId),
-        ],
-      });
+      // The edited message keeps its files.
+      const edited = {
+        ...pendingUser(session.id, text.trim(), original.parentId, []),
+        attachments: original.attachments,
+      };
+      set({ messages: [...get().messages.slice(0, index), edited] });
     }
     await startRun(session.id, { kind: 'edit', messageId, text });
   },

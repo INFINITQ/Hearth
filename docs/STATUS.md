@@ -162,9 +162,26 @@ commands with their live output. A Vite plugin fixes xterm.js under `freezeProto
     - Vitest: 25.
     - Playwright E2E: 35 (a server added in Settings, then a task that uses its tool).
 
-## Next: M10, attachments and images
+- **M10**: attachments and images.
+  - **Backend:** the `attachments` table (migration 5); attachments checked and saved with the
+    user message (chats and coding tasks), loaded with message paths, never sent to the UI in
+    bulk (`attachment_data` for one); an edited message keeps its files. Requests get attached
+    text as `<attachment>` blocks and images as `image_url` parts when the model can see them
+    (`Runtime::vision`, llama.cpp `/props` modalities); otherwise a note in the message and a
+    notice in the transcript. Context estimates count attachments.
+  - **UI:** the paperclip, drag and drop (Tauri's drop handler off), and paste; chips while
+    files are read (PDF text with pdf.js 6.4, images resized); attachments on messages, images
+    loaded when shown and opened larger on click; notices now show in chats too.
+  - **Fixed:** a store deadlock (re-locking the database while holding it) found by the new
+    tests before it shipped.
+  - **Tests (all green):**
+    - Rust: 134 core unit, 19 agent, 14 chat, 11 client, 5 MCP, 1 runtime, 4 app.
+    - Vitest: 28.
+    - Playwright E2E: 37 (a Markdown file, a PDF and an image to a vision model; an image to a
+      model without vision).
 
-- Attach text and code files and PDFs (their text, extracted in the UI with pdf.js) to chat
-  messages and coding tasks; drag and drop, paste.
-- Images for vision models (a local model's mmproj, or a connection that accepts images):
-  resized, sent as data URIs, shown as thumbnails in the transcript.
+## Next: M11, polish, installer and docs
+
+- First-run setup cards, the Guide page (the models guide in the app), a command palette.
+- Empty and error states, keyboard shortcuts, accessibility checks.
+- The NSIS installer build, final README, screenshots.

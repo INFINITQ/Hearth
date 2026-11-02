@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use super::{Result, StoreError};
 
-const MIGRATIONS: &[&str] = &[INITIAL, PROJECTS, CHECKPOINTS, SUMMARIES];
+const MIGRATIONS: &[&str] = &[INITIAL, PROJECTS, CHECKPOINTS, SUMMARIES, ATTACHMENTS];
 
 const INITIAL: &str = r#"
 CREATE TABLE kv (
@@ -127,6 +127,23 @@ CREATE TABLE permission_rules (
 /// request (the messages themselves stay, for the transcript and search).
 const SUMMARIES: &str = r#"
 ALTER TABLE messages ADD COLUMN covers_until TEXT;
+"#;
+
+/// Files and images attached to messages (images as resized `data:` URIs).
+const ATTACHMENTS: &str = r#"
+CREATE TABLE attachments (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL REFERENCES messages (id) ON DELETE CASCADE,
+  position INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('text', 'image')),
+  name TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  text TEXT,
+  data TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX attachments_by_message ON attachments (message_id, position);
 "#;
 
 pub fn apply(conn: &mut Connection) -> Result<()> {

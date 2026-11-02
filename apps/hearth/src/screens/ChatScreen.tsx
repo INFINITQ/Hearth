@@ -3,11 +3,12 @@ import { ContextMeter } from '../components/ContextMeter';
 import { ParamsPopover } from '../components/ParamsPopover';
 import { RunErrorBanner, Transcript } from '../components/Transcript';
 import { WebToggle } from '../components/WebActivity';
+import type { NewAttachment } from '../lib/types';
 import { useApp } from '../stores/app';
 import { useChat } from '../stores/chat';
 
-function send(text: string) {
-  void useChat.getState().send(text, 'chat');
+function send(text: string, attachments: NewAttachment[]) {
+  void useChat.getState().send(text, 'chat', attachments);
 }
 
 function stop() {

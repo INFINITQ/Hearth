@@ -11,13 +11,13 @@ import { TrustDialog } from '../components/code/TrustDialog';
 import { TerminalPanel } from '../components/terminal/TerminalPanel';
 import { Button } from '../components/ui/Button';
 import { latestTodos } from '../lib/toolCalls';
-import type { Project } from '../lib/types';
+import type { NewAttachment, Project } from '../lib/types';
 import { useApp } from '../stores/app';
 import { useChat } from '../stores/chat';
 import { useTerminal } from '../stores/terminal';
 
-function send(text: string) {
-  void useChat.getState().send(text, 'code');
+function send(text: string, attachments: NewAttachment[]) {
+  void useChat.getState().send(text, 'code', attachments);
 }
 
 function stop() {

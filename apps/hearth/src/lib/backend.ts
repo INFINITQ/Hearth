@@ -61,6 +61,8 @@ export interface ChatBackend {
   sessionsList(mode: Mode): Promise<SessionSummary[]>;
   sessionCreate(mode: Mode): Promise<Session>;
   sessionGet(id: string): Promise<SessionView>;
+  /** An attachment's contents (an image's data: URI, or a file's text). */
+  attachmentData(id: string): Promise<{ text: string | null; data: string | null }>;
   sessionUpdate(id: string, patch: SessionPatch): Promise<Session>;
   sessionDelete(id: string): Promise<void>;
   branchSelect(sessionId: string, messageId: string): Promise<SessionView>;
@@ -215,6 +217,7 @@ export function tauriBackend(): Backend {
     sessionsList: (mode) => invoke('sessions_list', { mode }),
     sessionCreate: (mode) => invoke('session_create', { mode }),
     sessionGet: (id) => invoke('session_get', { id }),
+    attachmentData: (id) => invoke('attachment_data', { id }),
     sessionUpdate: (id, patch) => invoke('session_update', { id, patch }),
     sessionDelete: (id) => invoke('session_delete', { id }),
     branchSelect: (sessionId, messageId) => invoke('branch_select', { sessionId, messageId }),
