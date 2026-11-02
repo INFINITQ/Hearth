@@ -207,6 +207,10 @@ Chats and coding tasks keep their requests inside the model's context window.
 - **Background runs:** runs live in Rust, so switching conversations or reloading the page never
   stops one; when a reply finishes or the agent asks something while Hearth is in the background,
   its taskbar button flashes.
+- **Long conversations:** while a reply streams, only that message renders again (messages keep
+  their identity until they change, and the message components are memoized). Messages away
+  from the screen skip layout and painting with `content-visibility: auto`; the newest six
+  always render. `Transcript.test.tsx` counts renders to keep it that way.
 - **Accessibility:** text colors read at 4.5:1 or more on every resting background in both themes
   (the token block in `styles/app.css` says which token is for what); an open conversation's title
   is the page's heading; the terminal tabs follow the ARIA tabs pattern (arrow keys, Delete

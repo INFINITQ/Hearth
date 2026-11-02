@@ -2,10 +2,10 @@
 // sources under its answer.
 
 import { ChevronRight, Globe, LoaderCircle, Search, TriangleAlert } from 'lucide-react';
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { backend } from '../lib/backend';
 import { cn } from '../lib/cn';
-import { type WebSource, parseArgs } from '../lib/toolCalls';
+import { type WebSource, parseArgs, sameAnswers } from '../lib/toolCalls';
 import type { Message, ToolCall } from '../lib/types';
 import { useChat } from '../stores/chat';
 import { Markdown } from './Markdown';
@@ -43,34 +43,42 @@ export function WebToggle() {
   );
 }
 
-/** A step where the model searched or read pages: one line each, opening to the results. */
-export function WebSteps({
-  message,
-  answers,
-  follows = false,
-}: {
+type WebStepsProps = {
   message: Message;
   answers: Map<string, Message> | undefined;
   /** Right after another step: they read as one list. */
   follows?: boolean;
-}) {
-  const running = useChat((s) => s.run?.tool?.callId ?? null);
-  const reasoning = message.reasoning ?? '';
-  return (
-    <div className={cn('space-y-1', follows && '-mt-6')} data-role="web-step">
-      {reasoning && <ThinkingBlock text={reasoning} ms={message.reasoningMs} live={false} />}
-      {message.content.trim() && <Markdown text={message.content} streaming={false} />}
-      {(message.toolCalls ?? []).map((call) => (
-        <WebCall
-          key={call.id}
-          call={call}
-          answer={answers?.get(call.id)}
-          running={running === call.id}
-        />
-      ))}
-    </div>
-  );
-}
+};
+
+/**
+ * A step where the model searched or read pages: one line each, opening to the results.
+ * Memoized like chat messages (the answers map is rebuilt on every change, so it's compared
+ * by contents).
+ */
+export const WebSteps = memo(
+  function WebSteps({ message, answers, follows = false }: WebStepsProps) {
+    const running = useChat((s) => s.run?.tool?.callId ?? null);
+    const reasoning = message.reasoning ?? '';
+    return (
+      <div className={cn('space-y-1', follows && '-mt-6')} data-role="web-step">
+        {reasoning && <ThinkingBlock text={reasoning} ms={message.reasoningMs} live={false} />}
+        {message.content.trim() && <Markdown text={message.content} streaming={false} />}
+        {(message.toolCalls ?? []).map((call) => (
+          <WebCall
+            key={call.id}
+            call={call}
+            answer={answers?.get(call.id)}
+            running={running === call.id}
+          />
+        ))}
+      </div>
+    );
+  },
+  (prev, next) =>
+    prev.message === next.message &&
+    prev.follows === next.follows &&
+    sameAnswers(prev.answers, next.answers),
+);
 
 function WebCall({
   call,

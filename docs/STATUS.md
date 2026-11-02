@@ -233,6 +233,24 @@ commands with their live output. A Vite plugin fixes xterm.js under `freezeProto
   - **Tests:** Playwright E2E 41 (3 accessibility tests; the terminal test now covers the arrow
     keys and Delete).
 
+- **Long conversations** (after M11): every streamed token used to render the whole
+  conversation again. Measured in the browser preview (development build) with 300 messages,
+  each reply with a table, code and math:
+
+  |                          | Before | After  |
+  | ------------------------ | ------ | ------ |
+  | Each token, median       | 40 ms  | 2 ms   |
+  | Each token, slowest 10 % | 58 ms  | 3 ms   |
+  | No history (for scale)   | 2.9 ms | 2.1 ms |
+  - Chat messages, web steps, agent steps and tasks are memoized; finished agent steps no
+    longer receive the live run, and per-step answer maps and web turns compare by contents
+    (they're rebuilt on every change).
+  - Messages away from the screen skip layout and painting (`content-visibility: auto`, with
+    a clip margin so focus rings and shadows aren't cut off); the newest six always render,
+    so opening a conversation lands exactly at its end.
+  - **Tests:** Vitest 31 (a render-count test for both transcripts that fails on the old code;
+    comparison helpers).
+
 ## What's left
 
 - **A run with a real model.** Everything is tested against the mock model server; llama.cpp
@@ -244,7 +262,10 @@ commands with their live output. A Vite plugin fixes xterm.js under `freezeProto
 - **Web:** DuckDuckGo limits automated searches now and then (Hearth says so; Brave, Tavily or
   SearXNG avoid it). PDFs on the web aren't read.
 - **Attachments:** images need a model with vision; scanned PDFs have no text to read (no OCR).
-- **Long chats** aren't virtualized; very long transcripts may get slower to scroll.
+- **Opening a very long conversation** renders every message's Markdown at once: about 0.6 s
+  for 300 messages with code and math in a development build (less in the installed app).
+  Streaming and scrolling stay fast; rendering only the messages on screen would be the next
+  step if that ever matters.
 - **The installer isn't signed,** so Windows SmartScreen warns the first time.
 - One E2E test ("Ask mode shows the diff first") failed once under heavy load and passed on
   every rerun; worth watching.

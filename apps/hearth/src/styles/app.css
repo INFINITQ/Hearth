@@ -225,6 +225,16 @@
 }
 
 /* ── Messages ─────────────────────────────────────────────────────────────────────────────── */
+
+/* Long conversations stay fast: messages away from the screen skip layout and painting, and
+   keep their size once shown. The newest few always render, so opening a conversation lands
+   exactly at its end. The clip margin leaves room for focus rings and shadows, which the
+   containment would otherwise cut off at each message's edge. */
+.transcript-list > :nth-last-child(n + 7) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 320px;
+  overflow-clip-margin: 32px;
+}
 .hearth-markdown {
   font-size: 15px;
   line-height: 1.68;

@@ -8,9 +8,9 @@ import {
   RotateCcw,
   TriangleAlert,
 } from 'lucide-react';
-import { useLayoutEffect, useRef, useState } from 'react';
+import { memo, useLayoutEffect, useRef, useState } from 'react';
 import { cn } from '../lib/cn';
-import type { WebTurn } from '../lib/toolCalls';
+import { type WebTurn, sameTurn } from '../lib/toolCalls';
 import type { Message } from '../lib/types';
 import { useChat } from '../stores/chat';
 import { SummaryDivider } from './ContextMeter';
@@ -20,25 +20,33 @@ import { AttachmentList } from './Attachments';
 import { Button, IconButton } from './ui/Button';
 import { Sources } from './WebActivity';
 
-export function MessageView({
-  message,
-  live,
-  last,
-  turn,
-}: {
+type MessageViewProps = {
   message: Message;
   live: boolean;
   last: boolean;
   /** The answer of a reply that searched the web first. */
   turn?: WebTurn;
-}) {
-  if (message.role === 'summary') return <SummaryDivider message={message} />;
-  return message.role === 'user' ? (
-    <UserMessage message={message} />
-  ) : (
-    <AssistantMessage message={message} live={live} last={last} turn={turn} />
-  );
-}
+};
+
+/**
+ * One message of a chat. Memoized: while a reply streams, only that reply renders again, not
+ * the whole conversation (messages keep their identity until they change).
+ */
+export const MessageView = memo(
+  function MessageView({ message, live, last, turn }: MessageViewProps) {
+    if (message.role === 'summary') return <SummaryDivider message={message} />;
+    return message.role === 'user' ? (
+      <UserMessage message={message} />
+    ) : (
+      <AssistantMessage message={message} live={live} last={last} turn={turn} />
+    );
+  },
+  (prev, next) =>
+    prev.message === next.message &&
+    prev.live === next.live &&
+    prev.last === next.last &&
+    sameTurn(prev.turn, next.turn),
+);
 
 export function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);

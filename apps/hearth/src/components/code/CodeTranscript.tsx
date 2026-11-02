@@ -1,8 +1,8 @@
 import { ArrowDown, LoaderCircle, TriangleAlert, Undo2 } from 'lucide-react';
 import { AlertDialog } from 'radix-ui';
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { LiveRun } from '../../lib/runReducer';
-import { answersByStep } from '../../lib/toolCalls';
+import { answersByStep, sameAnswers } from '../../lib/toolCalls';
 import type { Message, ToolCall } from '../../lib/types';
 import { useChat } from '../../stores/chat';
 import { AttachmentList } from '../Attachments';
@@ -23,6 +23,15 @@ function stateOf(call: ToolCall, answer: Message | undefined, run: LiveRun | nul
   if (run?.permission?.callId === call.id || run?.question?.callId === call.id) return 'waiting';
   if (run?.tool?.callId === call.id) return 'running';
   return run ? 'queued' : 'not_run';
+}
+
+/**
+ * Whether a step shows anything of the live run: it's being written, or has calls without an
+ * answer yet. Other steps get no run, so they don't render again on every streamed token.
+ */
+function followsRun(message: Message, answers: Map<string, Message>, run: LiveRun | null) {
+  if (!run) return false;
+  return run.messageId === message.id || (message.toolCalls ?? []).some((c) => !answers.has(c.id));
 }
 
 /** A coding session: your requests, the agent's steps and its tool calls, and what it needs. */
@@ -71,7 +80,7 @@ export function CodeTranscript() {
         role="log"
         aria-label="Session"
       >
-        <div className="mx-auto max-w-[800px] space-y-5 px-6 pb-8 pt-8">
+        <div className="transcript-list mx-auto max-w-[800px] space-y-5 px-6 pb-8 pt-8">
           {messages.map((message) =>
             message.role === 'user' ? (
               <UserTask
@@ -86,7 +95,7 @@ export function CodeTranscript() {
                 key={message.id}
                 message={message}
                 answers={steps.get(message.id) ?? NO_ANSWERS}
-                run={run}
+                run={followsRun(message, steps.get(message.id) ?? NO_ANSWERS, run) ? run : null}
                 last={message.id === lastAssistant}
               />
             ) : null,
@@ -117,7 +126,13 @@ export function CodeTranscript() {
   );
 }
 
-function UserTask({ message, undoable }: { message: Message; undoable: boolean }) {
+const UserTask = memo(function UserTask({
+  message,
+  undoable,
+}: {
+  message: Message;
+  undoable: boolean;
+}) {
   const [confirming, setConfirming] = useState(false);
   return (
     <div className="group flex flex-col items-end pt-1" data-role="user">
@@ -165,19 +180,27 @@ function UserTask({ message, undoable }: { message: Message; undoable: boolean }
       </AlertDialog.Root>
     </div>
   );
-}
+});
 
-function AgentStep({
-  message,
-  answers,
-  run,
-  last,
-}: {
+type AgentStepProps = {
   message: Message;
   answers: Map<string, Message>;
+  /** The live run, for the steps that show it (see followsRun). */
   run: LiveRun | null;
   last: boolean;
-}) {
+};
+
+/** One step of the agent: thinking, text and tool calls. Memoized like chat messages. */
+const AgentStep = memo(
+  AgentStepView,
+  (prev, next) =>
+    prev.message === next.message &&
+    prev.run === next.run &&
+    prev.last === next.last &&
+    sameAnswers(prev.answers, next.answers),
+);
+
+function AgentStepView({ message, answers, run, last }: AgentStepProps) {
   const streaming = run?.messageId === message.id && message.status === 'streaming';
   const calls = message.toolCalls ?? [];
   const reasoning = message.reasoning ?? '';

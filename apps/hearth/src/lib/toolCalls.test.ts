@@ -5,6 +5,8 @@ import {
   callTitle,
   canonicalTool,
   latestTodos,
+  sameAnswers,
+  sameTurn,
   webSources,
   webTurns,
 } from './toolCalls';
@@ -162,5 +164,36 @@ describe('tool calls', () => {
     // A plain reply isn't a web turn.
     expect(webTurns([user, step('a9', [])]).size).toBe(0);
     expect(webSources([])).toEqual([]);
+
+    // Rebuilt from the same messages, turns compare equal (so finished replies skip rendering).
+    const again = webTurns([
+      user,
+      step('a1', [{ ...call('web_search', {}), id: 'c1' }]),
+      searched,
+      answer,
+    ]);
+    expect(
+      sameTurn(
+        again.get('a3'),
+        webTurns([user, again.get('a3')!.start, searched, answer]).get('a3'),
+      ),
+    ).toBe(true);
+    expect(sameTurn(turns.get('a3'), again.get('a3'))).toBe(false);
+    expect(sameTurn(undefined, undefined)).toBe(true);
+    expect(sameTurn(turns.get('a3'), undefined)).toBe(false);
+  });
+
+  it('compares a step’s answers by the messages they hold, not the map', () => {
+    const first = tool('t1', 'c1');
+    const second = tool('t2', 'c2');
+    const a = new Map([
+      ['c1', first],
+      ['c2', second],
+    ]);
+    expect(sameAnswers(a, new Map(a))).toBe(true);
+    expect(sameAnswers(a, new Map([['c1', first]]))).toBe(false);
+    expect(sameAnswers(a, new Map([...a, ['c2', { ...second }]]))).toBe(false);
+    expect(sameAnswers(undefined, undefined)).toBe(true);
+    expect(sameAnswers(a, undefined)).toBe(false);
   });
 });

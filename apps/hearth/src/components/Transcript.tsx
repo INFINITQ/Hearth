@@ -1,6 +1,7 @@
 import { ArrowDown, Info, TriangleAlert, X } from 'lucide-react';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { answersByStep, webTurns } from '../lib/toolCalls';
+import type { Message } from '../lib/types';
 import { useApp } from '../stores/app';
 import { useChat } from '../stores/chat';
 import type { LiveRun, RunNotice } from '../lib/runReducer';
@@ -32,6 +33,8 @@ export function Transcript() {
     setAway(!near);
   };
 
+  // The message before each one (tool answers skipped), found in the same pass as rendering.
+  let previous: Message | undefined;
   return (
     <div className="relative min-h-0 flex-1">
       <div
@@ -41,12 +44,13 @@ export function Transcript() {
         role="log"
         aria-label="Conversation"
       >
-        <div className="mx-auto max-w-[760px] space-y-7 px-6 pb-10 pt-8">
+        <div className="transcript-list mx-auto max-w-[760px] space-y-7 px-6 pb-10 pt-8">
           {messages.map((message, index) => {
             // Web search: tool answers show in their step's lines, not on their own.
             if (message.role === 'tool') return null;
+            const before = previous;
+            previous = message;
             if (message.role === 'assistant' && message.toolCalls?.length) {
-              const before = messages.slice(0, index).findLast((m) => m.role !== 'tool');
               return (
                 <WebSteps
                   key={message.id}

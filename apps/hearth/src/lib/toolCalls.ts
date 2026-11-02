@@ -113,6 +113,20 @@ export function answersByStep(messages: Message[]): Map<string, Map<string, Mess
   return steps;
 }
 
+/**
+ * Whether two answer maps hold the same answers. The maps are rebuilt whenever the transcript
+ * changes (every streamed token), so finished steps compare their contents to skip rendering.
+ */
+export function sameAnswers(
+  a: Map<string, Message> | undefined,
+  b: Map<string, Message> | undefined,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.size !== b.size) return false;
+  for (const [callId, answer] of a) if (b.get(callId) !== answer) return false;
+  return true;
+}
+
 /** A command the agent ran (or runs now), for the terminal panel's Agent tab. */
 export type AgentCommand = {
   callId: string;
@@ -199,6 +213,16 @@ export function webTurns(messages: Message[]): Map<string, WebTurn> {
     }
   }
   return turns;
+}
+
+/** Whether two web turns are the same: the same first step and the same sources. */
+export function sameTurn(a: WebTurn | undefined, b: WebTurn | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.start !== b.start || a.sources.length !== b.sources.length) return false;
+  return a.sources.every((source, i) => {
+    const other = b.sources[i]!;
+    return source.url === other.url && source.title === other.title && source.read === other.read;
+  });
 }
 
 /** The newest to-do list in a session. */
