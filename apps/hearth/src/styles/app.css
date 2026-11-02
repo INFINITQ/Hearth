@@ -10,7 +10,10 @@
 
 /* ── Design tokens: "Calm minimal" ─────────────────────────────────────────────────────────
    Warm off-white / soft charcoal, one amber accent, few borders. Keep --bg in sync with
-   src-tauri/src/theme.rs (the native window background). */
+   src-tauri/src/theme.rs (the native window background).
+   Contrast (WCAG AA): every text color reads at 4.5:1 or more on --bg, --sidebar, --surface
+   and --surface-2 (--surface-3 is for hover and disabled states). --accent-strong carries
+   text (filled buttons); --accent is for icons, rings and small marks (3:1). */
 :root {
   color-scheme: light;
   --bg: #faf9f7;
@@ -19,16 +22,19 @@
   --surface-2: #f5f3f0;
   --surface-3: #ece9e4;
   --text: #1f1d1a;
-  --text-2: #6b655e;
-  --text-3: #9a938b;
+  --text-2: #5f5a54;
+  --text-3: #716c66;
   --line: #e7e3de;
   --line-strong: #d9d4cd;
   --accent: #d97706;
   --accent-hover: #b45309;
+  --accent-strong: #b45309;
+  --accent-strong-hover: #92400e;
   --accent-soft: #fdf3e7;
   --accent-text: #a14f05;
   --on-accent: #ffffff;
-  --danger: #dc2626;
+  --danger: #b91c1c;
+  --on-danger: #ffffff;
   --danger-soft: #fdecec;
   --success: #15803d;
   --selection: rgba(217, 119, 6, 0.2);
@@ -53,16 +59,19 @@
   --surface-2: #262421;
   --surface-3: #302e2a;
   --text: #ece9e4;
-  --text-2: #a8a29a;
-  --text-3: #78726b;
+  --text-2: #b4aea6;
+  --text-3: #928c86;
   --line: #2e2c29;
   --line-strong: #3a3733;
   --accent: #f59e0b;
   --accent-hover: #fbbf24;
+  --accent-strong: #f59e0b;
+  --accent-strong-hover: #fbbf24;
   --accent-soft: rgba(245, 158, 11, 0.12);
   --accent-text: #fbbf24;
   --on-accent: #1a1917;
   --danger: #f87171;
+  --on-danger: #1a1917;
   --danger-soft: rgba(248, 113, 113, 0.12);
   --success: #4ade80;
   --selection: rgba(245, 158, 11, 0.28);
@@ -117,10 +126,13 @@
   --color-line-strong: var(--line-strong);
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-strong-hover: var(--accent-strong-hover);
   --color-accent-soft: var(--accent-soft);
   --color-accent-text: var(--accent-text);
   --color-on-accent: var(--on-accent);
   --color-danger: var(--danger);
+  --color-on-danger: var(--on-danger);
   --color-danger-soft: var(--danger-soft);
   --color-success: var(--success);
   --color-segment-track: var(--segment-track);

@@ -42,12 +42,17 @@ export function TitleBar() {
           </IconButton>
         </div>
       )}
-      <div
-        className="min-w-0 flex-1 truncate px-4 text-[13px] font-medium text-text-2"
-        data-tauri-drag-region
-      >
-        {title}
-      </div>
+      {/* An open conversation's title is the page's heading (screens without one have their own). */}
+      {title ? (
+        <h1
+          className="min-w-0 flex-1 truncate px-4 text-[13px] font-medium text-text-2"
+          data-tauri-drag-region
+        >
+          {title}
+        </h1>
+      ) : (
+        <div className="min-w-0 flex-1" data-tauri-drag-region />
+      )}
       {screen === 'code' && project && <TerminalToggle />}
       {screen === 'code' && session?.mode === 'code' && <ChangesToggle />}
       {inConversation && <ModelPicker />}
@@ -82,7 +87,6 @@ function ChangesToggle() {
     <button
       type="button"
       aria-pressed={open}
-      aria-label="Changes"
       title="Files the agent changed"
       onClick={() => useChat.getState().toggleChanges()}
       className="mr-1 flex h-7 items-center gap-1.5 rounded-full px-3 text-[12.5px] font-medium text-text-2 transition-colors duration-150 hover:bg-surface-3/70 hover:text-text aria-pressed:bg-surface-3 aria-pressed:text-text"

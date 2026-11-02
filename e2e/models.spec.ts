@@ -125,9 +125,7 @@ test('a chat with a model on this PC loads it first, then answers', async () => 
   await openModels(page);
   await qwen(page).getByRole('button', { name: 'Chat model' }).click();
   await page.getByRole('radio', { name: 'Chat' }).click();
-  await expect(page.getByRole('button', { name: 'Model', exact: true })).toContainText(
-    'Qwen3.6 35B A3B',
-  );
+  await expect(page.getByRole('button', { name: /^Model: / })).toContainText('Qwen3.6 35B A3B');
   const box = page.getByRole('textbox', { name: 'Message' });
   await box.fill('Hi there');
   await box.press('Enter');

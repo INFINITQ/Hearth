@@ -64,12 +64,13 @@ export function ModelPicker() {
       <DropdownMenu.Trigger asChild>
         <button
           type="button"
-          aria-label="Model"
           className="mr-1 flex h-7 max-w-[280px] items-center gap-2 rounded-full px-3 text-[12.5px] font-medium text-text-2 transition-colors duration-150 hover:bg-surface-3/70 hover:text-text data-[state=open]:bg-surface-3"
         >
           <span
             className={cn('size-1.5 shrink-0 rounded-full', current ? 'bg-success' : 'bg-text-3')}
           />
+          {/* Screen readers hear "Model: <name>"; the name stays the visible text (WCAG 2.5.3). */}
+          <span className="sr-only">Model: </span>
           <span className="truncate">{label ?? 'Choose a model'}</span>
           <ChevronDown className="size-3.5 shrink-0" />
         </button>

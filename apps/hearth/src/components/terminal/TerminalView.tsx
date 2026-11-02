@@ -160,7 +160,7 @@ export default function TerminalView({ info, active }: { info: TerminalInfo; act
   }, [info.id]);
 
   useEffect(() => {
-    if (active) view.current?.focus();
+    if (active && useTerminal.getState().focusShown) view.current?.focus();
   }, [active]);
 
   return <div ref={box} className="h-full w-full" data-terminal={info.id} />;

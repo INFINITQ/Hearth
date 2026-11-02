@@ -215,6 +215,24 @@ commands with their live output. A Vite plugin fixes xterm.js under `freezeProto
     - Vitest: 28.
     - Playwright E2E: 38 (setup card, guide and palette added to the smoke tests).
 
+- **Accessibility pass** (after M11): axe-core (WCAG 2.2 A/AA and best practices) on every
+  screen and state, in light and dark, as a new E2E spec (`e2e/a11y.spec.ts`). Fixed:
+  - Text contrast: the lightest text read at 2.7:1 (light) and 3.3:1 (dark). The two secondary
+    text tokens moved so every text color reaches 4.5:1 on all resting backgrounds; filled
+    buttons use a deeper amber in light mode (white text 5:1), the danger button gets dark text
+    in dark mode, and light-mode error text is a deeper red.
+  - The model picker's spoken name now contains its visible text ("Model: mock-model"); the
+    Changes button's name includes its count.
+  - An open conversation's title is the page's heading (h1); the chat settings popover has a
+    name.
+  - Terminal tabs follow the ARIA tabs pattern: only tabs in the tab list, arrow keys and
+    Home/End move between them (the focus stays on the tabs), Delete closes a shell; a click
+    still moves into the shell.
+  - Not changed: wide code blocks aren't given a tab stop, because WebView2 (Chromium 130+)
+    already puts scrolling regions in the Tab order.
+  - **Tests:** Playwright E2E 41 (3 accessibility tests; the terminal test now covers the arrow
+    keys and Delete).
+
 ## What's left
 
 - **A run with a real model.** Everything is tested against the mock model server; llama.cpp

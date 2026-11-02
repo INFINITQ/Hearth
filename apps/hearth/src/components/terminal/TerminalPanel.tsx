@@ -57,26 +57,30 @@ export function TerminalPanel({ project }: { project: Project }) {
       style={{ height }}
     >
       <ResizeHandle />
-      <div
-        role="tablist"
-        aria-label="Terminals"
-        className="flex h-9 shrink-0 items-center gap-0.5 px-2 pt-1"
-      >
-        <Tab id={AGENT_TAB} label="Agent" selected={shown === AGENT_TAB} live={agentBusy}>
-          <Bot />
-        </Tab>
-        {terminals.map((terminal) => (
-          <Tab
-            key={terminal.id}
-            id={terminal.id}
-            label={names.get(terminal.id) ?? ''}
-            selected={shown === terminal.id}
-            ended={!terminal.running}
-            onClose={() => void useTerminal.getState().close(terminal.id)}
-          >
-            <SquareTerminal />
+      <div className="flex h-9 shrink-0 items-center gap-0.5 px-2 pt-1">
+        {/* Tabs only (the ARIA tabs pattern): arrow keys move between them, Delete closes one. */}
+        <div
+          role="tablist"
+          aria-label="Terminals"
+          className="flex items-center gap-0.5"
+          onKeyDown={moveBetweenTabs}
+        >
+          <Tab id={AGENT_TAB} label="Agent" selected={shown === AGENT_TAB} live={agentBusy}>
+            <Bot />
           </Tab>
-        ))}
+          {terminals.map((terminal) => (
+            <Tab
+              key={terminal.id}
+              id={terminal.id}
+              label={names.get(terminal.id) ?? ''}
+              selected={shown === terminal.id}
+              ended={!terminal.running}
+              onClose={(focus) => void useTerminal.getState().close(terminal.id, focus)}
+            >
+              <SquareTerminal />
+            </Tab>
+          ))}
+        </div>
         <NewTerminal />
         <div className="flex-1" />
         <IconButton
@@ -131,6 +135,24 @@ export function TerminalPanel({ project }: { project: Project }) {
   );
 }
 
+/** Left/Right (and Home/End) move to another tab and show it; the focus stays on the tabs. */
+function moveBetweenTabs(event: KeyboardEvent<HTMLDivElement>) {
+  const tabs = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
+  const at = tabs.indexOf(document.activeElement as HTMLElement);
+  if (at < 0) return;
+  const next = {
+    ArrowLeft: (at - 1 + tabs.length) % tabs.length,
+    ArrowRight: (at + 1) % tabs.length,
+    Home: 0,
+    End: tabs.length - 1,
+  }[event.key];
+  const tab = next === undefined ? undefined : tabs[next];
+  if (!tab?.dataset.tab) return;
+  event.preventDefault();
+  tab.focus();
+  useTerminal.getState().select(tab.dataset.tab, false);
+}
+
 function Tab({
   id,
   label,
@@ -145,52 +167,60 @@ function Tab({
   selected: boolean;
   ended?: boolean;
   live?: boolean;
-  onClose?: () => void;
+  /** `focus`: whether the shell shown next takes the focus. */
+  onClose?: (focus: boolean) => void;
   children: ReactNode;
 }) {
   return (
-    <div
+    <button
+      type="button"
+      role="tab"
+      data-tab={id}
+      aria-selected={selected}
+      tabIndex={selected ? 0 : -1}
+      aria-keyshortcuts={onClose ? 'Delete' : undefined}
+      // A click moves into the shell; Enter or Space (detail 0) leaves the focus on the tab.
+      onClick={(event) => useTerminal.getState().select(id, event.detail > 0)}
+      onKeyDown={(event) => {
+        if (event.key !== 'Delete' || !onClose) return;
+        event.preventDefault();
+        const list = event.currentTarget.closest('[role="tablist"]');
+        onClose(false);
+        // The tab is gone: the focus moves to the one shown now.
+        setTimeout(() => list?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus());
+      }}
       className={cn(
-        'group flex h-7 items-center rounded-control text-[12.5px] transition-colors duration-150',
+        'group flex h-7 items-center gap-1.5 rounded-control pl-2.5 text-[12.5px] font-medium transition-colors duration-150 [&_svg]:size-3.5 [&_svg]:stroke-[1.75]',
+        onClose ? 'pr-1' : 'pr-2.5',
         selected ? 'bg-surface-3 text-text' : 'text-text-2 hover:bg-surface-3/60 hover:text-text',
       )}
     >
-      <button
-        type="button"
-        role="tab"
-        aria-selected={selected}
-        onClick={() => useTerminal.getState().select(id)}
-        className={cn(
-          'flex h-full items-center gap-1.5 pl-2.5 font-medium [&_svg]:size-3.5 [&_svg]:stroke-[1.75]',
-          onClose ? 'pr-1' : 'pr-2.5',
-        )}
-      >
-        {children}
-        <span className={cn(ended && 'text-text-3 line-through decoration-text-3/60')}>
-          {label}
-        </span>
-        {live && (
-          <span
-            className="size-1.5 animate-pulse rounded-full bg-accent"
-            title="The agent is working"
-          />
-        )}
-      </button>
+      {children}
+      <span className={cn(ended && 'text-text-3 line-through decoration-text-3/60')}>{label}</span>
+      {live && (
+        <span
+          className="size-1.5 animate-pulse rounded-full bg-accent"
+          title="The agent is working"
+        />
+      )}
       {onClose && (
-        <button
-          type="button"
-          aria-label={`Close ${label}`}
+        // For the mouse; keyboard users press Delete on the tab (the tab announces it).
+        <span
+          aria-hidden="true"
           title="Close (ends what runs in it)"
-          onClick={onClose}
+          onClick={(event) => {
+            event.stopPropagation();
+            onClose(true);
+          }}
           className={cn(
-            'mr-1 grid size-5 place-items-center rounded-[5px] text-text-3 transition-opacity duration-150 hover:bg-surface-3 hover:text-text focus-visible:opacity-100',
+            'grid size-5 place-items-center rounded-[5px] text-text-3 transition-opacity duration-150 hover:bg-line-strong/60 hover:text-text',
             selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
           )}
         >
-          <X className="size-3" />
-        </button>
+          <X className="size-3!" />
+        </span>
       )}
-    </div>
+    </button>
   );
 }
 

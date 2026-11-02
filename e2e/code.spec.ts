@@ -287,7 +287,7 @@ test.describe('commands, changes, undo and steering', () => {
     await openProject(page);
     await send(page, 'Fix add().');
     await expect(page.getByText('Fixed.', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Changes', exact: true }).click();
+    await page.getByRole('button', { name: /^Changes( \d+)?$/ }).click();
     const panel = page.getByRole('complementary', { name: 'Changes' });
     await expect(panel.locator('[data-change="modified"]')).toContainText('calc.py');
     await panel.getByRole('button', { name: 'Revert src/calc.py' }).click();
@@ -388,12 +388,16 @@ test.describe('commands, changes, undo and steering', () => {
     await page.waitForTimeout(150);
     await page.screenshot({ path: join(dir, 'm7-agent-tab-dark.png') });
 
-    await panel.getByRole('button', { name: 'Close Git Bash' }).click();
-    await expect(panel.getByRole('tab', { name: 'Git Bash' })).toHaveCount(0);
-    await expect(panel.getByRole('tab', { name: 'Agent' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    // The ARIA tabs pattern: the arrow keys move between tabs, Delete closes a shell.
+    const agentTab = panel.getByRole('tab', { name: 'Agent' });
+    const bashTab = panel.getByRole('tab', { name: 'Git Bash' });
+    await agentTab.press('ArrowRight');
+    await expect(bashTab).toBeFocused();
+    await expect(bashTab).toHaveAttribute('aria-selected', 'true');
+    await bashTab.press('Delete');
+    await expect(bashTab).toHaveCount(0);
+    await expect(agentTab).toHaveAttribute('aria-selected', 'true');
+    await expect(agentTab).toBeFocused();
   });
 
   test('screenshots of commands and the Changes panel, for visual review', async () => {
@@ -419,7 +423,7 @@ test.describe('commands, changes, undo and steering', () => {
     await send(page, 'Fix add() and run the tests.');
     await expect(page.getByText(/the test passes now/)).toBeVisible();
     await tool(page, 'run_command').locator('button[aria-expanded]').click();
-    await page.getByRole('button', { name: 'Changes', exact: true }).click();
+    await page.getByRole('button', { name: /^Changes( \d+)?$/ }).click();
     await page
       .getByRole('complementary', { name: 'Changes' })
       .locator('[data-change] button[aria-expanded]')

@@ -207,6 +207,10 @@ Chats and coding tasks keep their requests inside the model's context window.
 - **Background runs:** runs live in Rust, so switching conversations or reloading the page never
   stops one; when a reply finishes or the agent asks something while Hearth is in the background,
   its taskbar button flashes.
+- **Accessibility:** text colors read at 4.5:1 or more on every resting background in both themes
+  (the token block in `styles/app.css` says which token is for what); an open conversation's title
+  is the page's heading; the terminal tabs follow the ARIA tabs pattern (arrow keys, Delete
+  closes a shell). `e2e/a11y.spec.ts` runs axe-core on every screen and state, light and dark.
 
 ## Window
 
@@ -222,6 +226,7 @@ minimized, WebView2 is asked to release memory.
 - **UI:** Vitest with jsdom and an in-memory fake backend (`lib/backend.ts`).
 - **End to end:** Playwright attaches over WebView2's debugging port to the real debug build with
   the UI embedded (frozen prototypes only apply there). The window is hidden and the data folder
-  is fresh for each run.
+  is fresh for each run. The hidden window doesn't run CSS transitions, so tests that read colors
+  switch transitions off first (see `e2e/a11y.spec.ts`).
 
 See [build-notes.md](build-notes.md) for the detailed contracts and the Windows traps.

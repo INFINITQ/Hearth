@@ -17,6 +17,8 @@ type TerminalState = {
   terminals: TerminalInfo[];
   /** The tab shown: a terminal's id, or the Agent tab. */
   active: string;
+  /** Whether the shell just shown takes the keyboard focus (not while arrowing through tabs). */
+  focusShown: boolean;
   error: string | null;
   /** Opening the panel starts a shell when the project has none. */
   setOpen(open: boolean): void;
@@ -25,8 +27,9 @@ type TerminalState = {
   /** Terminals that kept running while the page reloaded. */
   load(): Promise<void>;
   create(shell?: ShellKind | null): Promise<void>;
-  close(id: string): Promise<void>;
-  select(id: string): void;
+  /** `focus`: the shell shown next takes the focus (a click), or not (a key on the tabs). */
+  close(id: string, focus?: boolean): Promise<void>;
+  select(id: string, focus?: boolean): void;
   exited(id: string, code: number | null): void;
   dismissError(): void;
 };
@@ -38,6 +41,7 @@ export const useTerminal = create<TerminalState>()((set, get) => ({
   height: 280,
   terminals: [],
   active: AGENT_TAB,
+  focusShown: true,
   error: null,
 
   setOpen: (open) => {
@@ -63,13 +67,19 @@ export const useTerminal = create<TerminalState>()((set, get) => ({
     try {
       // The real size follows as soon as the terminal is on screen.
       const info = await backend().terminalOpen(shell, projectId(), 100, 16);
-      set((s) => ({ terminals: [...s.terminals, info], active: info.id, error: null, open: true }));
+      set((s) => ({
+        terminals: [...s.terminals, info],
+        active: info.id,
+        focusShown: true,
+        error: null,
+        open: true,
+      }));
     } catch (err) {
       set({ error: errorMessage(err), active: AGENT_TAB });
     }
   },
 
-  close: async (id) => {
+  close: async (id, focus = true) => {
     const { terminals, active } = get();
     const closing = terminals.find((t) => t.id === id);
     const rest = terminals.filter((t) => t.id !== id);
@@ -77,13 +87,14 @@ export const useTerminal = create<TerminalState>()((set, get) => ({
     set({
       terminals: rest,
       active: active === id ? (sameProject.at(-1)?.id ?? AGENT_TAB) : active,
+      focusShown: focus,
     });
     await backend()
       .terminalClose(id)
       .catch(() => {});
   },
 
-  select: (id) => set({ active: id }),
+  select: (id, focus = true) => set({ active: id, focusShown: focus }),
   exited: (id, code) =>
     set((s) => ({
       terminals: s.terminals.map((t) =>

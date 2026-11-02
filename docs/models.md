@@ -183,7 +183,7 @@ report refusals and KL divergence. The same download-safety rules apply.
 
 ## Which programs run these models
 
-|                                     | llama.cpp (Hearth's default)                                    | LM Studio                               | Ollama                                                                                                       |
+| Question                            | llama.cpp (Hearth's default)                                    | LM Studio                               | Ollama                                                                                                       |
 | ----------------------------------- | --------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | All the models above                | Yes                                                             | Yes (download them in its Discover tab) | Yes, via `ollama pull hf.co/<repo>:<quant>` (Gemma 4 uncensored also as `huihui_ai/gemma-4-abliterated:26b`) |
 | Speed of MoE models on a 12 GB card | Best: expert weights kept in RAM, the rest placed automatically | Good: has an expert-offload option      | Slower: splits the model by layer                                                                            |

@@ -28,6 +28,7 @@ export function ParamsPopover() {
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content
+          aria-label="Chat settings"
           side="top"
           align="start"
           sideOffset={8}
