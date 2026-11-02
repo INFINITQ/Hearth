@@ -129,8 +129,14 @@ impl Web {
         cancel: &CancellationToken,
     ) -> Result<Page, WebError> {
         let allow_local = self.settings.get().web.allow_local;
+        let read = fetch::fetch(url, max_chars.clamp(1000, 100_000), allow_local);
         tokio::select! {
-            result = fetch::fetch(url, max_chars.clamp(1000, 100_000), allow_local) => result,
+            // Lookups and redirects add up; a minute is the most a page gets.
+            result = tokio::time::timeout(Duration::from_secs(60), read) => {
+                result.unwrap_or_else(|_| {
+                    Err(WebError::Network("The page took too long to load.".into()))
+                })
+            }
             () = cancel.cancelled() => Err(WebError::Cancelled),
         }
     }

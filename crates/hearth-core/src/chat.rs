@@ -479,15 +479,10 @@ impl Chat {
                 text,
                 attachments,
             } => {
-                let saved = self
-                    .store
-                    .insert_message(NewMessage::user(&session.id, parent.as_deref(), &text))
-                    .and_then(|message| {
-                        if !attachments.is_empty() {
-                            self.store.add_attachments(&message.id, &attachments)?;
-                        }
-                        Ok(message)
-                    });
+                let saved = self.store.insert_message_with(
+                    NewMessage::user(&session.id, parent.as_deref(), &text),
+                    &attachments,
+                );
                 match saved {
                     Ok(message) => (Some(message.id.clone()), message.id),
                     Err(err) => {

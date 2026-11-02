@@ -13,7 +13,7 @@ use futures_util::StreamExt;
 use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::proc;
@@ -22,6 +22,8 @@ use crate::proc;
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 /// Lines of a server's stderr kept for its error messages and the Settings page.
 const LOG_LINES: usize = 50;
+/// How long an HTTP notification may take.
+const NOTIFY_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -37,6 +39,22 @@ pub struct Client {
     next_id: AtomicI64,
     log: Arc<Mutex<VecDeque<String>>>,
     closed: Arc<AtomicBool>,
+    /// Notified when a stdio server's output ends.
+    ended: Arc<Notify>,
+}
+
+/// One line of a server's output, decoded leniently (a stray byte that isn't UTF-8 doesn't end
+/// the connection). `None` at the end.
+async fn read_line<R: tokio::io::AsyncBufRead + Unpin>(reader: &mut R) -> Option<String> {
+    let mut bytes = Vec::new();
+    match reader.read_until(b'\n', &mut bytes).await {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(
+            String::from_utf8_lossy(&bytes)
+                .trim_end_matches(['\r', '\n'])
+                .to_owned(),
+        ),
+    }
 }
 
 enum Kind {
@@ -55,13 +73,24 @@ enum Kind {
     },
 }
 
-/// A program by name, as the shell would find it: on PATH, with `.exe`, `.cmd` or `.bat`
-/// (MCP configs say `npx`, which is `npx.cmd` on Windows).
+/// What Windows can start directly, in the order `cmd.exe` tries them (PATHEXT).
+const EXECUTABLE: [&str; 4] = [".com", ".exe", ".bat", ".cmd"];
+
+/// A program by name, as the shell would find it: on PATH, with `.exe`, `.cmd` or `.bat`.
+/// MCP configs say `npx`, which is `npx.cmd` on Windows; the extensionless `npx` next to it is
+/// a shell script Windows can't run, so a name without an executable extension only ever
+/// matches with one.
 pub fn find_program(program: &str, path: Option<&str>) -> Option<PathBuf> {
     let given = Path::new(program);
-    let extensions = ["", ".exe", ".cmd", ".bat", ".com"];
+    let named = given
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| EXECUTABLE.contains(&format!(".{}", ext.to_ascii_lowercase()).as_str()));
     let with_extension = |base: &Path| {
-        extensions.iter().find_map(|ext| {
+        if named {
+            return base.is_file().then(|| base.to_path_buf());
+        }
+        EXECUTABLE.iter().find_map(|ext| {
             let candidate = PathBuf::from(format!("{}{ext}", base.display()));
             candidate.is_file().then_some(candidate)
         })
@@ -113,6 +142,7 @@ impl Client {
 
         let log = Arc::new(Mutex::new(VecDeque::new()));
         let closed = Arc::new(AtomicBool::new(false));
+        let ended = Arc::new(Notify::new());
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let (input, mut lines_out) = mpsc::unbounded_channel::<String>();
 
@@ -128,11 +158,11 @@ impl Client {
                 }
             }
         });
-        // Keeps the last lines the server wrote to stderr.
+        // Keeps the last lines the server wrote to stderr (in whatever encoding).
         let errors = log.clone();
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
+            let mut stderr = BufReader::new(stderr);
+            while let Some(line) = read_line(&mut stderr).await {
                 let mut log = lock(&errors);
                 log.push_back(line);
                 while log.len() > LOG_LINES {
@@ -141,10 +171,11 @@ impl Client {
             }
         });
         // Reads answers (and the server's own requests and notifications).
-        let (answers, reply, done) = (pending.clone(), input.clone(), closed.clone());
+        let (answers, reply) = (pending.clone(), input.clone());
+        let (done, signal) = (closed.clone(), ended.clone());
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
+            let mut stdout = BufReader::new(stdout);
+            while let Some(line) = read_line(&mut stdout).await {
                 // Some servers print other things to stdout; only JSON-RPC counts.
                 let Ok(message) = serde_json::from_str::<Value>(line.trim()) else {
                     continue;
@@ -176,6 +207,7 @@ impl Client {
             for (_, waiting) in lock(&answers).drain() {
                 let _ = waiting.send(Err("The server stopped.".into()));
             }
+            signal.notify_waiters();
         });
 
         Ok(Client {
@@ -187,7 +219,20 @@ impl Client {
             next_id: AtomicI64::new(1),
             log,
             closed,
+            ended,
         })
+    }
+
+    /// Waits until the server's process ends (never, for HTTP servers).
+    pub async fn wait_closed(&self) {
+        loop {
+            // Registered before the check, so an end in between isn't missed.
+            let ended = self.ended.notified();
+            if self.is_closed() {
+                return;
+            }
+            ended.await;
+        }
     }
 
     /// Talks to a server over Streamable HTTP.
@@ -220,6 +265,7 @@ impl Client {
             next_id: AtomicI64::new(1),
             log: Arc::new(Mutex::new(VecDeque::new())),
             closed: Arc::new(AtomicBool::new(false)),
+            ended: Arc::new(Notify::new()),
         })
     }
 
@@ -301,7 +347,9 @@ impl Client {
                 let _ = input.send(message.to_string());
             }
             Kind::Http { .. } => {
-                let _ = self.post(&message, None).await;
+                // Nothing waits on a notification's answer, so a server that never sends one
+                // mustn't hold anything up.
+                let _ = tokio::time::timeout(NOTIFY_TIMEOUT, self.post(&message, None)).await;
             }
         }
     }
@@ -329,7 +377,8 @@ impl Client {
                 Kind::Stdio { input, pending, .. } => {
                     let (tx, rx) = oneshot::channel();
                     lock(pending).insert(id, tx);
-                    if input.send(message.to_string()).is_err() {
+                    // The server may have ended (and its last answers been sent) in between.
+                    if self.is_closed() || input.send(message.to_string()).is_err() {
                         lock(pending).remove(&id);
                         return Err("The server stopped.".into());
                     }
@@ -436,10 +485,10 @@ impl Client {
             return pick(&body).unwrap_or_else(|| Err("The server's answer was missing.".into()));
         }
         let mut stream = response.bytes_stream();
-        let mut buffer = String::new();
+        let mut buffer: Vec<u8> = Vec::new();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|err| format!("The server's stream broke off: {err}"))?;
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            buffer.extend_from_slice(&chunk);
             for event in take_events(&mut buffer) {
                 if let Ok(message) = serde_json::from_str::<Value>(&event)
                     && let Some(answer) = pick(&message)
@@ -452,15 +501,25 @@ impl Client {
     }
 }
 
-/// Complete SSE events' data, taken from the front of `buffer`.
-fn take_events(buffer: &mut String) -> Vec<String> {
-    let normalized = buffer.replace("\r\n", "\n");
-    let Some(end) = normalized.rfind("\n\n") else {
-        *buffer = normalized;
+/// Complete SSE events' data, taken from the front of `buffer`. Bytes stay bytes until an event
+/// is whole, so a character split between two network chunks isn't broken.
+fn take_events(buffer: &mut Vec<u8>) -> Vec<String> {
+    let blank = |bytes: &[u8]| {
+        (0..bytes.len().saturating_sub(1)).rev().find_map(|i| {
+            if bytes[i..].starts_with(b"\n\n") {
+                Some((i, 2))
+            } else if bytes[i..].starts_with(b"\r\n\r\n") {
+                Some((i, 4))
+            } else {
+                None
+            }
+        })
+    };
+    let Some((end, gap)) = blank(buffer) else {
         return Vec::new();
     };
-    let complete = normalized[..end].to_owned();
-    *buffer = normalized[end + 2..].to_owned();
+    let complete = String::from_utf8_lossy(&buffer[..end]).replace("\r\n", "\n");
+    buffer.drain(..end + gap);
     complete
         .split("\n\n")
         .filter_map(|event| {
@@ -480,24 +539,43 @@ mod tests {
 
     #[test]
     fn sse_events_are_taken_whole() {
-        let mut buffer = String::from("event: message\r\ndata: {\"a\":1}\r\n\r\ndata: {\"b\":");
+        let mut buffer = b"event: message\r\ndata: {\"a\":1}\r\n\r\ndata: {\"b\":".to_vec();
         assert_eq!(take_events(&mut buffer), vec![r#"{"a":1}"#.to_owned()]);
-        assert_eq!(buffer, "data: {\"b\":");
-        buffer.push_str("2}\n\n: a comment\n\n");
+        assert_eq!(buffer, b"data: {\"b\":");
+        buffer.extend_from_slice(b"2}\n\n: a comment\n\n");
         assert_eq!(take_events(&mut buffer), vec![r#"{"b":2}"#.to_owned()]);
         assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn a_character_split_between_chunks_stays_whole() {
+        let event = "data: {\"t\":\"café ✓\"}\n\n".as_bytes();
+        let cut = event.iter().position(|&b| b == 0xC3).unwrap() + 1;
+        let mut buffer = event[..cut].to_vec();
+        assert!(take_events(&mut buffer).is_empty());
+        buffer.extend_from_slice(&event[cut..]);
+        assert_eq!(
+            take_events(&mut buffer),
+            vec!["{\"t\":\"café ✓\"}".to_owned()]
+        );
     }
 
     #[test]
     fn programs_are_found_with_windows_extensions() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("npx.cmd"), "@echo off").unwrap();
+        // Node also puts a shell script called just `npx` there, which Windows can't run.
+        std::fs::write(dir.path().join("npx"), "#!/bin/sh").unwrap();
         let path = dir.path().display().to_string();
         assert_eq!(
             find_program("npx", Some(&path)),
             Some(dir.path().join("npx.cmd"))
         );
         assert_eq!(find_program("missing-tool", Some(&path)), None);
+        assert_eq!(
+            find_program("npx.cmd", Some(&path)),
+            Some(dir.path().join("npx.cmd"))
+        );
         let full = dir.path().join("npx").display().to_string();
         assert_eq!(find_program(&full, None), Some(dir.path().join("npx.cmd")));
     }

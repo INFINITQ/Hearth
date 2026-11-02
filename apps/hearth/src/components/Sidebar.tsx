@@ -1,4 +1,5 @@
 import {
+  BookOpen,
   Boxes,
   MessageSquare,
   PanelLeft,
@@ -77,6 +78,12 @@ export function Sidebar() {
       </nav>
 
       <div className="space-y-0.5 px-2 pb-2.5 pt-2">
+        <NavItem
+          icon={<BookOpen />}
+          label="Guide"
+          active={screen === 'guide'}
+          onClick={() => app().go('guide')}
+        />
         <NavItem
           icon={<Boxes />}
           label="Models"

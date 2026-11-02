@@ -1,6 +1,6 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { UserAttentionType, getCurrentWindow } from '@tauri-apps/api/window';
 import { fakeChat } from './fakeChat';
 import { mergePatch } from './mergePatch';
 import {
@@ -44,6 +44,8 @@ export interface WindowControls {
   toggleMaximize(): void;
   close(): void;
   isMaximized(): Promise<boolean>;
+  /** Flashes the taskbar button (something finished or waits for the user). */
+  requestAttention(): void;
   onResized(listener: () => void): () => void;
   /** Tells Rust where the HTML maximize button is, for Windows 11's Snap Layouts. */
   reportMaximizeRect(rect: { right: number; top: number; width: number; height: number }): void;
@@ -287,6 +289,8 @@ export function tauriBackend(): Backend {
       toggleMaximize: () => void win.toggleMaximize(),
       close: () => void win.close(),
       isMaximized: () => win.isMaximized(),
+      requestAttention: () =>
+        void win.requestUserAttention(UserAttentionType.Informational).catch(() => {}),
       onResized: (listener) => unsubscriber(win.onResized(() => listener())),
       reportMaximizeRect: (rect) => void invoke('caption_maximize_rect', { rect }),
       onCaption: (listener) => subscribe<CaptionState>('hearth://caption', listener),
@@ -330,6 +334,7 @@ export function fakeBackend(initial: Partial<Settings> = {}): Backend {
       toggleMaximize: noop,
       close: noop,
       isMaximized: async () => false,
+      requestAttention: noop,
       onResized: () => noop,
       reportMaximizeRect: noop,
       onCaption: () => noop,

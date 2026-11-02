@@ -1,10 +1,12 @@
 import { useEffect } from 'react';
+import { CommandPalette } from './components/CommandPalette';
 import { Sidebar, newConversation } from './components/Sidebar';
 import { TitleBar } from './components/TitleBar';
 import { backend } from './lib/backend';
 import { applyTheme, resolveTheme, watchSystemTheme } from './lib/theme';
 import { ChatScreen } from './screens/ChatScreen';
 import { CodeScreen } from './screens/CodeScreen';
+import { GuideScreen } from './screens/GuideScreen';
 import { ModelsScreen } from './screens/ModelsScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { useApp } from './stores/app';
@@ -43,8 +45,10 @@ export function App() {
           {screen === 'code' && <CodeScreen />}
           {screen === 'models' && <ModelsScreen />}
           {screen === 'settings' && <SettingsScreen />}
+          {screen === 'guide' && <GuideScreen />}
         </main>
       </div>
+      <CommandPalette />
     </div>
   );
 }
@@ -85,6 +89,11 @@ function useShortcuts() {
       // Everything else typed in a terminal belongs to the shell (Ctrl+B, Ctrl+N…).
       if (event.target instanceof Element && event.target.closest('.xterm')) return;
       const key = event.key.toLowerCase();
+      if (key === 'k' && !event.shiftKey) {
+        event.preventDefault();
+        app.setPalette(!app.palette);
+        return;
+      }
       if (key === 'b' && !event.shiftKey) {
         event.preventDefault();
         app.toggleSidebar();

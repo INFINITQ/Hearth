@@ -53,6 +53,36 @@ test('Ctrl+B hides and shows the sidebar', async () => {
   await expect(sidebar).toBeVisible();
 });
 
+test('a new install shows the setup steps, the guide and the command palette', async () => {
+  const { page } = app;
+  const setup = page.getByRole('region', { name: 'Get started' });
+  await expect(setup).toContainText('Install llama.cpp');
+  await expect(setup).toContainText('Choose the chat model');
+  await setup.getByRole('button', { name: 'Open the guide' }).click();
+  await expect(page.getByRole('heading', { name: 'Running models with Hearth' })).toBeVisible();
+
+  const search = page.getByLabel('Search commands and conversations');
+  await page.keyboard.press('Control+K');
+  await search.fill('settings');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+  await expect(search).toHaveCount(0);
+
+  await page.keyboard.press('Control+K');
+  await search.fill('theme dark');
+  await expect(page.getByRole('option')).toHaveCount(1);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+  await page.keyboard.press('Control+K');
+  await search.fill('new coding');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { name: 'Open a project to start coding' })).toBeVisible();
+  await page.keyboard.press('Control+K');
+  await page.keyboard.press('Escape');
+  await expect(search).toHaveCount(0);
+});
+
 test('the page cannot reach the network', async () => {
   const { page } = app;
   const violations = await trackViolations(page);
@@ -126,6 +156,7 @@ test('screenshots of every screen in light and dark, for visual review', async (
       ['code', () => page.getByRole('radio', { name: 'Code' }).click()],
       ['models', () => page.getByRole('button', { name: 'Models' }).click()],
       ['settings', () => page.getByRole('button', { name: 'Settings', exact: true }).click()],
+      ['guide', () => page.getByRole('button', { name: 'Guide' }).click()],
     ] as const) {
       await open();
       await page.waitForTimeout(150);

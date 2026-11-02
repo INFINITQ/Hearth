@@ -316,6 +316,7 @@ fn row_to_message(row: &Row) -> rusqlite::Result<Message> {
 fn row_to_attachment(row: &Row) -> rusqlite::Result<(String, Attachment)> {
     let kind: String = row.get(2)?;
     let text: Option<String> = row.get(6)?;
+    let length: Option<i64> = row.get(8)?;
     Ok((
         row.get(1)?,
         Attachment {
@@ -328,17 +329,20 @@ fn row_to_attachment(row: &Row) -> rusqlite::Result<(String, Attachment)> {
             name: row.get(3)?,
             mime: row.get(4)?,
             size: row.get(5)?,
-            chars: text.as_deref().map_or(0, |t| t.chars().count() as i64),
+            chars: length
+                .unwrap_or_else(|| text.as_deref().map_or(0, |t| t.chars().count() as i64)),
             text,
             data: row.get(7)?,
         },
     ))
 }
 
-const ATTACHMENT_COLUMNS: &str = "id, message_id, kind, name, mime, size, text, data";
+const ATTACHMENT_COLUMNS: &str = "id, message_id, kind, name, mime, size, text, data, NULL";
+/// The same without the contents (`length(text)` stands in for the text).
+const ATTACHMENT_SUMMARY: &str = "id, message_id, kind, name, mime, size, NULL, NULL, length(text)";
 
-/// Root to `leaf`, with attachments.
-fn path_in(conn: &Connection, leaf: &str) -> Result<Vec<Message>> {
+/// Root to `leaf`, with attachments (their contents only when asked).
+fn path_in(conn: &Connection, leaf: &str, contents: bool) -> Result<Vec<Message>> {
     let mut statement = conn.prepare(&format!(
         "WITH RECURSIVE path(id, depth) AS (
            SELECT id, 0 FROM messages WHERE id = ?1
@@ -350,12 +354,40 @@ fn path_in(conn: &Connection, leaf: &str) -> Result<Vec<Message>> {
     ))?;
     let rows = statement.query_map([leaf], row_to_message)?;
     let mut messages: Vec<Message> = rows.collect::<rusqlite::Result<_>>()?;
-    with_attachments(conn, &mut messages)?;
+    with_attachments(conn, &mut messages, contents)?;
     Ok(messages)
 }
 
-/// Fills in the user messages' attachments.
-fn with_attachments(conn: &Connection, messages: &mut [Message]) -> Result<()> {
+/// Saves checked attachments for a message, in order.
+fn insert_attachments(conn: &Connection, message_id: &str, files: &[NewAttachment]) -> Result<()> {
+    for (position, attachment) in files.iter().enumerate() {
+        let kind = match attachment.kind {
+            AttachmentKind::Text => "text",
+            AttachmentKind::Image => "image",
+        };
+        conn.execute(
+            "INSERT INTO attachments (id, message_id, position, kind, name, mime, size, text, data, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                new_id(),
+                message_id,
+                position as i64,
+                kind,
+                attachment.name.trim(),
+                attachment.mime,
+                attachment.size,
+                attachment.text,
+                attachment.data,
+                now_ms()
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+/// Fills in the user messages' attachments: with their contents (for requests), or just what
+/// they are (for the transcript, which loads an image when it shows it).
+fn with_attachments(conn: &Connection, messages: &mut [Message], contents: bool) -> Result<()> {
     let ids: Vec<&str> = messages
         .iter()
         .filter(|m| m.role == MessageRole::User)
@@ -365,8 +397,13 @@ fn with_attachments(conn: &Connection, messages: &mut [Message]) -> Result<()> {
         return Ok(());
     }
     let marks = vec!["?"; ids.len()].join(", ");
+    let columns = if contents {
+        ATTACHMENT_COLUMNS
+    } else {
+        ATTACHMENT_SUMMARY
+    };
     let mut statement = conn.prepare(&format!(
-        "SELECT {ATTACHMENT_COLUMNS} FROM attachments WHERE message_id IN ({marks}) ORDER BY position"
+        "SELECT {columns} FROM attachments WHERE message_id IN ({marks}) ORDER BY position"
     ))?;
     let rows = statement.query_map(rusqlite::params_from_iter(ids.iter()), row_to_attachment)?;
     let mut found: std::collections::HashMap<String, Vec<Attachment>> = Default::default();
@@ -467,6 +504,17 @@ fn index(conn: &Connection, message: &Message) -> Result<()> {
 impl Store {
     /// Adds a message under `parent_id` (or as a new root) and makes it the active leaf.
     pub fn insert_message(&self, new: NewMessage) -> Result<Message> {
+        self.insert_message_with(new, &[])
+    }
+
+    /// Adds a message with files attached: all of it is saved, or none.
+    pub fn insert_message_with(
+        &self,
+        new: NewMessage,
+        attachments: &[NewAttachment],
+    ) -> Result<Message> {
+        check_attachments(attachments)?;
+        let files: Vec<NewAttachment> = attachments.iter().map(checked).collect::<Result<_>>()?;
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         session_in(&tx, &new.session_id)?;
@@ -514,7 +562,10 @@ impl Store {
             "UPDATE sessions SET active_leaf_id = ?1, updated_at = ?2 WHERE id = ?3",
             params![id, now, new.session_id],
         )?;
-        let message = message_in(&tx, &id)?;
+        insert_attachments(&tx, &id, &files)?;
+        let mut message = [message_in(&tx, &id)?];
+        with_attachments(&tx, &mut message, false)?;
+        let [message] = message;
         index(&tx, &message)?;
         tx.commit()?;
         Ok(message)
@@ -566,7 +617,7 @@ impl Store {
     pub fn message(&self, id: &str) -> Result<Message> {
         let conn = self.conn();
         let mut message = [message_in(&conn, id)?];
-        with_attachments(&conn, &mut message)?;
+        with_attachments(&conn, &mut message, true)?;
         let [message] = message;
         Ok(message)
     }
@@ -586,32 +637,11 @@ impl Store {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         message_in(&tx, message_id)?;
-        for (position, attachment) in checked.iter().enumerate() {
-            let kind = match attachment.kind {
-                AttachmentKind::Text => "text",
-                AttachmentKind::Image => "image",
-            };
-            tx.execute(
-                "INSERT INTO attachments (id, message_id, position, kind, name, mime, size, text, data, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    new_id(),
-                    message_id,
-                    position as i64,
-                    kind,
-                    attachment.name.trim(),
-                    attachment.mime,
-                    attachment.size,
-                    attachment.text,
-                    attachment.data,
-                    now_ms()
-                ],
-            )?;
-        }
+        insert_attachments(&tx, message_id, &checked)?;
         tx.commit()?;
         // Read back on the same connection (its lock is still held).
         let mut saved = [message_in(&conn, message_id)?];
-        with_attachments(&conn, &mut saved)?;
+        with_attachments(&conn, &mut saved, false)?;
         let [saved] = saved;
         Ok(saved.attachments)
     }
@@ -635,14 +665,16 @@ impl Store {
         let Some(leaf) = session_in(&conn, session_id)?.active_leaf_id else {
             return Ok(Vec::new());
         };
-        path_in(&conn, &leaf)
+        // For showing: attachments without their contents.
+        path_in(&conn, &leaf, false)
     }
 
     /// The messages from the root down to `message_id` (inclusive).
     pub fn path_to(&self, message_id: &str) -> Result<Vec<Message>> {
         let conn = self.conn();
         message_in(&conn, message_id)?;
-        path_in(&conn, message_id)
+        // For requests: attachments with their contents.
+        path_in(&conn, message_id, true)
     }
 
     /// The versions of a message: it and its siblings (same parent), oldest first.

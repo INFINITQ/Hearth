@@ -180,8 +180,53 @@ commands with their live output. A Vite plugin fixes xterm.js under `freezeProto
     - Playwright E2E: 37 (a Markdown file, a PDF and an image to a vision model; an image to a
       model without vision).
 
-## Next: M11, polish, installer and docs
+- **M11**: polish, installer and docs.
+  - **Guide** in the sidebar: docs/models.md in the app (bundled, reads offline).
+  - **Get started** card on an empty chat or session while no model is chosen: llama.cpp found,
+    model files found, a model chosen, each with where to do it.
+  - **Ctrl+K** command palette: actions (new chat or session, open a project, web search, the
+    terminal, screens, sidebar, theme) and recent conversations, filtered as you type.
+  - The taskbar button flashes when a reply finishes or the agent asks something while Hearth
+    is in the background.
+  - The NSIS installer (per-user) builds with `pnpm build`.
+  - README rewritten; decision records 0004 (own MCP client) and 0005 (ConPTY directly).
+  - **Fixed after a code review of M7–M10:**
+    - MCP servers set up as `npx` (the usual way) failed: the lookup found Node's extensionless
+      shell script before `npx.cmd`. Names without an executable extension now only match
+      `.com`, `.exe`, `.bat` or `.cmd`.
+    - HTTP MCP notifications could hang a stopped task (now 10 s at most); a stray non-UTF-8
+      line no longer ends a server's connection; SSE answers no longer break characters split
+      between network chunks; a request sent as a server ends no longer waits out its timeout.
+    - A server that quits on its own shows as stopped at once (not at the next call), a stale
+      connection can't overwrite a newer one's state, and restarting or removing a server ends
+      a start still in progress.
+    - Page reading's address checks held only for direct connections: it now bypasses system
+      proxies when local pages aren't allowed, also refuses IPv4-compatible, NAT64, 6to4,
+      site-local, Teredo and documentation IPv6 forms, parses HTML off the async threads and
+      gives a page a minute at most.
+    - A user message and its files are saved in one transaction; transcripts load attachment
+      sizes, not their contents (requests still get them).
+    - Terminals: closing the console no longer holds a lock that resizing waits on; a failed
+      thread start no longer leaks the console.
+  - **Tests (all green):**
+    - Rust: 135 core unit, 19 agent, 14 chat, 11 client, 6 MCP, 1 runtime, 4 app (the review
+      fixes added tests for the `npx` lookup, split characters in SSE, IPv6 forms and a server
+      that quits on its own).
+    - Vitest: 28.
+    - Playwright E2E: 38 (setup card, guide and palette added to the smoke tests).
 
-- First-run setup cards, the Guide page (the models guide in the app), a command palette.
-- Empty and error states, keyboard shortcuts, accessibility checks.
-- The NSIS installer build, final README, screenshots.
+## What's left
+
+- **A run with a real model.** Everything is tested against the mock model server; llama.cpp
+  and the models are for you to install (Guide). The first real run may show model-specific
+  quirks (tool-call formats, thinking tags) that the parsers don't cover yet.
+- **Coding sessions** can't edit or regenerate earlier messages (chats can).
+- **MCP:** tools only (no resources, prompts or sampling); servers on the old SSE transport
+  aren't supported (ADR 0004).
+- **Web:** DuckDuckGo limits automated searches now and then (Hearth says so; Brave, Tavily or
+  SearXNG avoid it). PDFs on the web aren't read.
+- **Attachments:** images need a model with vision; scanned PDFs have no text to read (no OCR).
+- **Long chats** aren't virtualized; very long transcripts may get slower to scroll.
+- **The installer isn't signed,** so Windows SmartScreen warns the first time.
+- One E2E test ("Ask mode shows the diff first") failed once under heavy load and passed on
+  every rerun; worth watching.

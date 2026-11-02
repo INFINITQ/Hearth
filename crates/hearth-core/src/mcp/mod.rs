@@ -114,6 +114,28 @@ struct Live {
     client: Option<Arc<Client>>,
     /// Bumped by every (re)start, so a slow start that was replaced can't win.
     generation: u64,
+    /// The task that starts the server and then watches it; aborting it ends the server.
+    task: Option<tokio::task::AbortHandle>,
+}
+
+impl Live {
+    /// Stops the start (or the watch) in progress, which ends the server's process.
+    fn stop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+        self.client = None;
+    }
+}
+
+/// The server's last words, for a "stopped" message.
+fn stopped(client: &Client) -> String {
+    format!(
+        "It stopped. {}",
+        client.log().last().cloned().unwrap_or_default()
+    )
+    .trim()
+    .to_owned()
 }
 
 struct Inner {
@@ -372,6 +394,7 @@ impl Mcp {
                 config,
                 client: None,
                 generation: 0,
+                task: None,
             })
             .collect();
         Self(Arc::new(Inner {
@@ -453,6 +476,7 @@ impl Mcp {
                     state: ServerState::Off,
                     client: None,
                     generation: 0,
+                    task: None,
                 }),
             }
         }
@@ -462,7 +486,12 @@ impl Mcp {
     }
 
     pub fn remove(&self, id: &str) -> Result<Vec<ServerView>, String> {
-        lock(&self.0.servers).retain(|live| live.config.id != id);
+        lock(&self.0.servers).retain_mut(|live| {
+            if live.config.id == id {
+                live.stop();
+            }
+            live.config.id != id
+        });
         self.persist()?;
         self.changed();
         Ok(self.servers())
@@ -512,7 +541,7 @@ impl Mcp {
                 return;
             };
             live.generation += 1;
-            live.client = None;
+            live.stop();
             live.state = if live.config.enabled {
                 ServerState::Starting
             } else {
@@ -527,9 +556,10 @@ impl Mcp {
             return;
         };
         let this = self.clone();
-        tokio::spawn(async move {
+        let id = config.id.clone();
+        let task = tokio::spawn(async move {
             let started = connect(&config).await;
-            {
+            let client = {
                 let mut servers = lock(&this.0.servers);
                 let Some(live) = servers
                     .iter_mut()
@@ -539,14 +569,53 @@ impl Mcp {
                 };
                 match started {
                     Ok((client, server, tools)) => {
-                        live.client = Some(client);
+                        live.client = Some(client.clone());
                         live.state = ServerState::Ready { server, tools };
+                        Some(client)
                     }
-                    Err(error) => live.state = ServerState::Failed { error },
+                    Err(error) => {
+                        live.state = ServerState::Failed { error };
+                        None
+                    }
                 }
-            }
+            };
             this.changed();
+            // Watches the server: if its process ends, the Settings page says so at once.
+            let Some(client) = client else {
+                return;
+            };
+            client.wait_closed().await;
+            this.mark_stopped(&config.id, &client);
         });
+        if let Some(live) = lock(&self.0.servers)
+            .iter_mut()
+            .find(|live| live.config.id == id && live.generation == generation)
+        {
+            live.task = Some(task.abort_handle());
+        } else {
+            task.abort();
+        }
+    }
+
+    /// The server `client` belongs to stopped (unless it was replaced in the meantime).
+    fn mark_stopped(&self, id: &str, client: &Arc<Client>) {
+        {
+            let mut servers = lock(&self.0.servers);
+            let Some(live) = servers.iter_mut().find(|live| {
+                live.config.id == id
+                    && live
+                        .client
+                        .as_ref()
+                        .is_some_and(|current| Arc::ptr_eq(current, client))
+            }) else {
+                return;
+            };
+            live.client = None;
+            live.state = ServerState::Failed {
+                error: stopped(client),
+            };
+        }
+        self.changed();
     }
 
     /// Every ready server's tools.
@@ -615,20 +684,7 @@ impl Mcp {
         let result = client.call_tool(&tool, arguments, cancel).await;
         if client.is_closed() {
             // The server died: say so on the Settings page too.
-            if let Some(live) = lock(&self.0.servers)
-                .iter_mut()
-                .find(|live| live.config.id == id)
-            {
-                live.state = ServerState::Failed {
-                    error: format!(
-                        "It stopped. {}",
-                        client.log().last().cloned().unwrap_or_default()
-                    )
-                    .trim()
-                    .to_owned(),
-                };
-            }
-            self.changed();
+            self.mark_stopped(&id, &client);
         }
         let result = result?;
         Ok(Called {

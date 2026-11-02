@@ -2,6 +2,7 @@ import { Clock, FolderOpen, FolderPlus, SquareTerminal } from 'lucide-react';
 import { useMemo } from 'react';
 import { Composer } from '../components/Composer';
 import { ContextMeter } from '../components/ContextMeter';
+import { SetupCard } from '../components/SetupCard';
 import { RunErrorBanner } from '../components/Transcript';
 import { ChangesPanel } from '../components/code/ChangesPanel';
 import { CodeTranscript } from '../components/code/CodeTranscript';
@@ -127,18 +128,7 @@ function NewSession({ project }: { project: Project }) {
         <div className="mt-4">
           <RunErrorBanner />
         </div>
-        {!model && (
-          <p className="mt-3.5 text-center text-[12.5px] text-text-3">
-            No coding model is set up yet.{' '}
-            <button
-              type="button"
-              className="font-medium text-accent-text hover:underline"
-              onClick={() => useApp.getState().go('settings')}
-            >
-              Choose one
-            </button>
-          </p>
-        )}
+        {!model && <SetupCard role="code" />}
       </div>
     </div>
   );

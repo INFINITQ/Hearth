@@ -589,6 +589,14 @@ async fn attached_files_and_images_reach_a_model_that_can_see() {
     // The UI gets what was attached, not the contents.
     let shown = serde_json::to_value(&path[0]).unwrap();
     assert!(shown["attachments"][1].get("data").is_none());
+    // The transcript's copy has sizes, not contents; requests get the contents.
+    assert!(path[0].attachments[0].text.is_none());
+    assert!(path[0].attachments[1].data.is_none());
+    let request_path = h.store.path_to(&path[0].id).unwrap();
+    assert_eq!(
+        request_path[0].attachments[0].text.as_deref(),
+        Some("buy oranges")
+    );
     let image = h.store.attachment(&path[0].attachments[1].id).unwrap();
     assert_eq!(image.data.as_deref(), Some(PIXEL));
     assert!(

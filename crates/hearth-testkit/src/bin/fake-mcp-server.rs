@@ -2,8 +2,10 @@
 //!
 //! - `FAKE_MCP_FAIL=1`: says why on stderr and exits before answering anything.
 //! - `FAKE_MCP_CRASH=1`: exits when a tool is called.
+//! - `FAKE_MCP_EXIT_AFTER_MS=n`: exits on its own n ms after it starts.
 
 use std::io::{BufRead, Write};
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -11,6 +13,16 @@ fn main() {
     if std::env::var_os("FAKE_MCP_FAIL").is_some() {
         eprintln!("fake-mcp: the API key is missing");
         std::process::exit(2);
+    }
+    if let Some(ms) = std::env::var("FAKE_MCP_EXIT_AFTER_MS")
+        .ok()
+        .and_then(|ms| ms.parse::<u64>().ok())
+    {
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(ms));
+            eprintln!("fake-mcp quit");
+            std::process::exit(4);
+        });
     }
     eprintln!("fake-mcp ready");
     let stdin = std::io::stdin();

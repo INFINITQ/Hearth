@@ -110,6 +110,15 @@ function handle(event: RunEnvelope) {
       event,
     ),
   );
+  // Away from Hearth: the taskbar button flashes when it's done or needs an answer.
+  if (
+    (event.type === 'finished' ||
+      event.type === 'permission_request' ||
+      event.type === 'question') &&
+    !document.hasFocus()
+  ) {
+    backend().window.requestAttention();
+  }
   if (event.type === 'finished' && state.run && state.session) {
     void refresh(state.session.id);
     void state.loadLists();

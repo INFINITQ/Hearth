@@ -465,13 +465,7 @@ impl Agent {
             .map_err(ChatError::Busy)?;
         let mut new = NewMessage::user(&session.id, session.active_leaf_id.as_deref(), text);
         new.turn = turn;
-        let saved = inner.store.insert_message(new).and_then(|user| {
-            if attachments.is_empty() {
-                return Ok(user);
-            }
-            inner.store.add_attachments(&user.id, &attachments)?;
-            inner.store.message(&user.id)
-        });
+        let saved = inner.store.insert_message_with(new, &attachments);
         let user = match saved {
             Ok(user) => user,
             Err(err) => {

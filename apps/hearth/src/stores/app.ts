@@ -4,7 +4,7 @@ import { mergePatch } from '../lib/mergePatch';
 import type { Settings } from '../lib/types';
 
 export type Mode = 'chat' | 'code';
-export type Screen = Mode | 'models' | 'settings';
+export type Screen = Mode | 'models' | 'settings' | 'guide';
 
 type AppState = {
   screen: Screen;
@@ -13,7 +13,10 @@ type AppState = {
   settings: Settings;
   /** Windows' own light/dark mode, for the "system" theme. */
   systemDark: boolean;
+  /** The command palette (Ctrl+K) is open. */
+  palette: boolean;
   go(screen: Screen): void;
+  setPalette(open: boolean): void;
   setMode(mode: Mode): void;
   setSystemDark(dark: boolean): void;
   /** Settings changed elsewhere (another part of the UI, or Rust). */
@@ -29,10 +32,12 @@ export const useApp = create<AppState>()((set, get) => ({
   mode: 'chat',
   settings: boot.settings,
   systemDark: boot.systemDark,
+  palette: false,
 
   go: (screen) =>
     set(screen === 'chat' || screen === 'code' ? { screen, mode: screen } : { screen }),
   setMode: (mode) => set({ mode, screen: mode }),
+  setPalette: (palette) => set({ palette }),
   setSystemDark: (systemDark) => set({ systemDark }),
   applySettings: (settings) => set({ settings }),
 

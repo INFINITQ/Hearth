@@ -124,6 +124,9 @@ Chats with web search on and the agent's `web_search` and `web_fetch` tools shar
   to 16,000 characters by default. Only http(s) pages; PDFs and files are refused with a reason.
   Unless Settings → Web allows it, addresses on this PC or the local network are refused: each
   hop of a redirect is looked up and checked, and the connection goes to the checked address.
+  For that check to hold, page reading then connects directly instead of through a system proxy
+  (a proxy would look the name up again itself). Only global IPv6 counts as the internet, and
+  6to4 addresses are judged by the IPv4 address inside them. A page gets a minute at most.
 - **In chats**, the composer's Web button turns web search on for the chat (its `search_mode`).
   A reply then gets the two web tools and may search and read for up to five steps before it has
   to answer; the steps and their answers are saved in the message tree like the agent's. The
@@ -189,6 +192,21 @@ Chats and coding tasks keep their requests inside the model's context window.
 - **When the server says no:** if llama-server still answers "exceeds the available context
   size", its `n_ctx` replaces the known window, everything before the newest user message is
   summarized, and the request is tried once more.
+
+## The UI (`apps/hearth/src`)
+
+- **Screens:** Chat, Code (with the Changes and terminal panels), Models, Settings, and the
+  Guide (docs/models.md bundled into the app, so it reads offline).
+- **State** lives in Zustand stores: `app` (screen, settings, the command palette), `chat`
+  (sessions, the open conversation, its live run, projects), `models`, `terminal`. A run's
+  events go through one pure reducer (`lib/runReducer.ts`), tested on its own.
+- **First run:** while no model is chosen for chats (or coding), an empty conversation shows a
+  "Get started" card: llama.cpp found, model files found, a model chosen.
+- **Ctrl+K** opens a command palette with every action and recent conversations. App shortcuts
+  don't fire while a terminal has the focus (except Ctrl+`), so the shell gets Ctrl+B and the rest.
+- **Background runs:** runs live in Rust, so switching conversations or reloading the page never
+  stops one; when a reply finishes or the agent asks something while Hearth is in the background,
+  its taskbar button flashes.
 
 ## Window
 

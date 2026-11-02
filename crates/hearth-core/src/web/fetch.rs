@@ -53,11 +53,19 @@ pub fn is_public(ip: IpAddr) -> bool {
             if let Some(v4) = v6.to_ipv4_mapped() {
                 return is_public(IpAddr::V4(v4));
             }
-            !(v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                || v6.is_unique_local()
-                || v6.is_unicast_link_local())
+            let s = v6.segments();
+            // Only global unicast (2000::/3) is the internet. That leaves out loopback, unique
+            // and site local, link local, multicast, IPv4-compatible and NAT64 addresses.
+            if s[0] & 0xe000 != 0x2000 {
+                return false;
+            }
+            // 6to4 carries an IPv4 address; Teredo and the documentation range aren't hosts.
+            if s[0] == 0x2002 {
+                let [a, b] = s[1].to_be_bytes();
+                let [c, d] = s[2].to_be_bytes();
+                return is_public(IpAddr::V4(std::net::Ipv4Addr::new(a, b, c, d)));
+            }
+            !(s[0] == 0x2001 && (s[1] == 0 || s[1] == 0x0db8))
         }
     }
 }
@@ -111,12 +119,17 @@ pub(super) async fn fetch(
     for _ in 0..=MAX_REDIRECTS {
         let found = addresses(&url, allow_local).await?;
         let host = url.host_str().unwrap_or_default().to_owned();
-        let client = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(25))
-            .resolve_to_addrs(&host, &found)
+            .resolve_to_addrs(&host, &found);
+        if !allow_local {
+            // A proxy would look the name up again itself, past the check above.
+            builder = builder.no_proxy();
+        }
+        let client = builder
             .build()
             .map_err(|err| WebError::Network(err.to_string()))?;
         let response = client
@@ -204,7 +217,11 @@ async fn read(url: Url, response: reqwest::Response, max_chars: usize) -> Result
     let text = decode(&bytes, &content_type);
     let html = mime.contains("html") || (mime.is_empty() && looks_like_html(&text));
     let (title, markdown) = if html {
-        readable_markdown(&text, url.as_str())
+        // Parsing megabytes of HTML is CPU work: off the async threads.
+        let address = url.to_string();
+        tokio::task::spawn_blocking(move || readable_markdown(&text, &address))
+            .await
+            .map_err(|_| WebError::Refused("The page couldn't be read.".into()))?
     } else {
         (url.to_string(), text)
     };
@@ -333,10 +350,24 @@ mod tests {
             "fd00::1",
             "fe80::1",
             "::ffff:192.168.0.1",
+            // IPv4-compatible, NAT64, 6to4 and site-local forms of local addresses.
+            "::127.0.0.1",
+            "::192.168.1.1",
+            "64:ff9b::7f00:1",
+            "2002:7f00:1::1",
+            "2002:c0a8:101::1",
+            "fec0::1",
+            "2001:db8::1",
+            "2001:0:4136:e378::1",
         ] {
             assert!(!is_public(local.parse().unwrap()), "{local} is local");
         }
-        for public in ["93.184.216.34", "1.1.1.1", "2606:4700:4700::1111"] {
+        for public in [
+            "93.184.216.34",
+            "1.1.1.1",
+            "2606:4700:4700::1111",
+            "2002:5db8:d822::1",
+        ] {
             assert!(is_public(public.parse().unwrap()), "{public} is public");
         }
     }

@@ -164,6 +164,28 @@ async fn a_server_that_dies_mid_call_is_marked_failed() {
 }
 
 #[tokio::test]
+async fn a_server_that_quits_on_its_own_shows_as_stopped_without_a_call() {
+    let mcp = Mcp::new(Arc::new(Store::open_in_memory().unwrap()));
+    mcp.save(stdio("Brief", &[("FAKE_MCP_EXIT_AFTER_MS", "800")]))
+        .unwrap();
+    assert!(matches!(settled(&mcp).await, ServerState::Ready { .. }));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let error = loop {
+        if let ServerState::Failed { error } = mcp.servers()[0].status.clone() {
+            break error;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{:#?}",
+            mcp.servers()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert!(error.contains("stopped"), "{error}");
+    assert!(mcp.tools().is_empty());
+}
+
+#[tokio::test]
 async fn disabling_a_server_stops_it_and_enabling_starts_it_again() {
     let mcp = Mcp::new(Arc::new(Store::open_in_memory().unwrap()));
     let id = mcp.save(stdio("Toggle", &[])).unwrap()[0].config.id.clone();

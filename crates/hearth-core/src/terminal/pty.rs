@@ -256,6 +256,14 @@ impl Pty {
         // SAFETY: as above.
         let mut input = unsafe { File::from_raw_handle(input_write.take().0) };
         let (sender, receiver) = mpsc::channel::<Vec<u8>>();
+        // Owned before anything else can fail, so dropping it cleans up (Drop below).
+        let pty = Pty {
+            console: Mutex::new(Some(console)),
+            input: Mutex::new(sender),
+            process,
+            pid,
+            job,
+        };
         std::thread::Builder::new()
             .name("terminal-input".into())
             .spawn(move || {
@@ -269,13 +277,6 @@ impl Pty {
                     }
                 }
             })?;
-        let pty = Pty {
-            console: Mutex::new(Some(console)),
-            input: Mutex::new(sender),
-            process,
-            pid,
-            job,
-        };
         Ok((pty, output))
     }
 
@@ -310,7 +311,9 @@ impl Pty {
 
     /// Closes the console. Its output ends after whatever was still in it.
     pub fn close_console(&self) {
-        if let Some(console) = lock(&self.console).take() {
+        // Taken out first: closing can wait for the console, and nothing else should.
+        let console = lock(&self.console).take();
+        if let Some(console) = console {
             // SAFETY: taken out of the mutex, so it's closed exactly once.
             unsafe { ClosePseudoConsole(console) };
         }
