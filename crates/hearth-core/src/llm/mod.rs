@@ -6,6 +6,7 @@ pub mod assemble;
 pub mod client;
 pub mod sse;
 pub mod think;
+pub mod toolparse;
 pub mod types;
 
 pub use assemble::{Assembler, AssistantReply};

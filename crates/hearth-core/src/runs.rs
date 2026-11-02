@@ -1,8 +1,9 @@
-//! Runs: a reply being written (and, from M3, an agent working through a task).
+//! Runs: a chat reply being written, or the agent working through a task.
 //!
 //! Rust owns each run: it keeps going if the UI reloads or the window is hidden. The UI attaches
 //! a sink (a Tauri channel) to watch it, and gets a snapshot of where the run is whenever it
-//! (re)attaches, so nothing is lost and nothing needs replaying.
+//! (re)attaches, so nothing is lost and nothing needs replaying. A tool that is running and a
+//! question waiting for the user are sent again after the snapshot.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,14 +12,19 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use crate::llm::Usage;
+use crate::agent::permissions::Choice;
+use crate::agent::tools::{Class, Todo};
+use crate::llm::{ToolCall, Usage};
 use crate::new_id;
+use crate::store::Message;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunState {
     Starting,
     Streaming,
+    /// Waiting for the user: a permission prompt or a question.
+    Waiting,
     Finished,
 }
 
@@ -28,6 +34,8 @@ pub enum RunEnd {
     Completed,
     Cancelled,
     Failed,
+    /// Stopped by a guard (the step limit, repeated calls). A new message carries on.
+    Paused,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -37,7 +45,8 @@ pub enum RunEnd {
     rename_all_fields = "camelCase"
 )]
 pub enum RunEvent {
-    /// Where the run is now. Sent first to a sink that (re)attaches.
+    /// Where the run is now. Sent first to a sink that (re)attaches. `message_id` is the reply
+    /// streaming at that moment, if any.
     Snapshot {
         session_id: String,
         state: RunState,
@@ -75,6 +84,63 @@ pub enum RunEvent {
         finish_reason: Option<String>,
         usage: Option<Usage>,
         reasoning_ms: Option<i64>,
+        /// The final text, when it differs from what streamed (tool calls written as text are
+        /// taken out).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        content: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        tool_calls: Vec<ToolCall>,
+    },
+    /// A tool call's arguments arriving, e.g. a long file being written.
+    ToolCallProgress {
+        message_id: String,
+        index: usize,
+        name: Option<String>,
+        chars: usize,
+    },
+    ToolStarted {
+        call_id: String,
+        tool: String,
+        title: String,
+    },
+    /// A tool call answered; `message` is the saved tool message.
+    ToolFinished {
+        call_id: String,
+        status: String,
+        summary: String,
+        message: Box<Message>,
+    },
+    PermissionRequest {
+        request_id: String,
+        call_id: String,
+        tool: String,
+        class: Class,
+        title: String,
+        path: Option<String>,
+        diff: Option<String>,
+        choices: Vec<Choice>,
+    },
+    PermissionResolved {
+        request_id: String,
+        decision: String,
+    },
+    Question {
+        question_id: String,
+        call_id: String,
+        question: String,
+        options: Vec<String>,
+    },
+    QuestionAnswered {
+        question_id: String,
+        answer: String,
+    },
+    Todos {
+        items: Vec<Todo>,
+    },
+    /// Something the user should know that isn't an error (a pause, a cut-off reply).
+    Notice {
+        level: String,
+        text: String,
     },
     TitleChanged {
         session_id: String,
@@ -136,7 +202,13 @@ struct Progress {
     message_id: Option<String>,
     content: String,
     reasoning: String,
+    /// The tool running now (its `ToolStarted`).
+    tool: Option<RunEvent>,
+    /// The permission request or question waiting for the user.
+    pending: Option<RunEvent>,
 }
+
+type Listener = Arc<dyn Fn(&RunInfo) + Send + Sync>;
 
 pub struct Run {
     pub id: String,
@@ -145,12 +217,14 @@ pub struct Run {
     seq: AtomicU64,
     sink: Mutex<Option<Arc<dyn RunSink>>>,
     progress: Mutex<Progress>,
+    listener: Option<Listener>,
 }
 
 impl Run {
     pub fn emit(&self, event: RunEvent) {
-        {
+        let changed = {
             let mut progress = lock(&self.progress);
+            let before = progress.state;
             match &event {
                 RunEvent::Started {
                     user_message_id, ..
@@ -163,11 +237,37 @@ impl Run {
                 }
                 RunEvent::ReasoningDelta { text, .. } => progress.reasoning.push_str(text),
                 RunEvent::ContentDelta { text, .. } => progress.content.push_str(text),
+                RunEvent::MessageFinished { .. } => {
+                    progress.message_id = None;
+                    progress.content.clear();
+                    progress.reasoning.clear();
+                }
+                RunEvent::ToolStarted { .. } => progress.tool = Some(event.clone()),
+                RunEvent::ToolFinished { .. } => progress.tool = None,
+                RunEvent::PermissionRequest { .. } | RunEvent::Question { .. } => {
+                    progress.pending = Some(event.clone());
+                    progress.state = RunState::Waiting;
+                }
+                RunEvent::PermissionResolved { .. } | RunEvent::QuestionAnswered { .. } => {
+                    progress.pending = None;
+                    progress.state = RunState::Streaming;
+                }
                 RunEvent::Finished { .. } => progress.state = RunState::Finished,
                 _ => {}
             }
-        }
+            (progress.state != before
+                && matches!(progress.state, RunState::Waiting)
+                    != matches!(before, RunState::Waiting))
+            .then_some(progress.state)
+        };
         self.send(event);
+        if let (Some(state), Some(listener)) = (changed, &self.listener) {
+            listener(&RunInfo {
+                run_id: self.id.clone(),
+                session_id: self.session_id.clone(),
+                state,
+            });
+        }
     }
 
     fn send(&self, event: RunEvent) {
@@ -193,6 +293,12 @@ impl Run {
             content: progress.content,
             reasoning: progress.reasoning,
         });
+        if let Some(tool) = progress.tool {
+            self.send(tool);
+        }
+        if let Some(pending) = progress.pending {
+            self.send(pending);
+        }
     }
 
     pub fn state(&self) -> RunState {
@@ -208,8 +314,6 @@ pub struct RunInfo {
     pub state: RunState,
 }
 
-type Listener = Arc<dyn Fn(&RunInfo) + Send + Sync>;
-
 /// All runs in progress. At most one per session.
 #[derive(Default)]
 pub struct RunManager {
@@ -222,7 +326,8 @@ impl RunManager {
         Self::default()
     }
 
-    /// Called whenever a run starts or ends (the app turns this into sidebar spinners).
+    /// Called whenever a run starts, ends, or starts or stops waiting for the user (the app
+    /// turns this into sidebar spinners and "needs you" dots).
     pub fn on_change(&self, listener: impl Fn(&RunInfo) + Send + Sync + 'static) {
         *lock(&self.listener) = Some(Arc::new(listener));
     }
@@ -236,6 +341,7 @@ impl RunManager {
 
     /// Starts a run for `session_id`, sending its events to `sink`.
     pub fn begin(&self, session_id: &str, sink: Arc<dyn RunSink>) -> Result<Arc<Run>, String> {
+        let listener = lock(&self.listener).clone();
         let run = {
             let mut runs = lock(&self.runs);
             if runs.values().any(|run| run.session_id == session_id) {
@@ -253,7 +359,10 @@ impl RunManager {
                     message_id: None,
                     content: String::new(),
                     reasoning: String::new(),
+                    tool: None,
+                    pending: None,
                 }),
+                listener,
             });
             runs.insert(run.id.clone(), run.clone());
             run
@@ -379,5 +488,43 @@ mod tests {
         runs.finish(&run.id);
         assert!(!runs.attach(&run.id, sink));
         assert!(runs.for_session("s1").is_none());
+    }
+
+    #[test]
+    fn a_waiting_question_is_sent_again_on_attach_and_reported_as_waiting() {
+        let runs = RunManager::new();
+        let states = Arc::new(Mutex::new(Vec::new()));
+        let seen = states.clone();
+        runs.on_change(move |info| lock(&seen).push(info.state));
+        let run = runs.begin("s1", Arc::new(CollectSink::default())).unwrap();
+        let question = RunEvent::Question {
+            question_id: "q".into(),
+            call_id: "c".into(),
+            question: "Which one?".into(),
+            options: vec!["A".into(), "B".into()],
+        };
+        run.emit(question.clone());
+        assert_eq!(run.state(), RunState::Waiting);
+
+        let late = Arc::new(CollectSink::default());
+        runs.attach(&run.id, late.clone());
+        let events = late.events();
+        assert!(matches!(
+            events[0],
+            RunEvent::Snapshot {
+                state: RunState::Waiting,
+                ..
+            }
+        ));
+        assert_eq!(events[1], question);
+
+        run.emit(RunEvent::QuestionAnswered {
+            question_id: "q".into(),
+            answer: "B".into(),
+        });
+        assert_eq!(
+            *lock(&states),
+            [RunState::Starting, RunState::Waiting, RunState::Streaming]
+        );
     }
 }

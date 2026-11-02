@@ -1,27 +1,52 @@
 // How a run's events change what the transcript shows. Pure, so it is tested on its own.
 
-import type { Message, RunEnvelope } from './types';
+import type { Message, PermissionRequest, Question, RunEnvelope } from './types';
 
 export type LiveRun = {
   runId: string | null;
   sessionId: string;
   /** The reply being written. */
   messageId: string | null;
-  status: 'starting' | 'streaming';
+  status: 'starting' | 'streaming' | 'waiting';
   /** llama.cpp reading the prompt (shown before the first token). */
   progress: { processed: number; total: number } | null;
   /** The text so far, kept so a reload of the transcript can't lose it. */
   content: string;
   reasoning: string;
+  /** Coding sessions: the tool running now. */
+  tool: { callId: string; title: string } | null;
+  /** A tool call's arguments arriving (a long file being written). */
+  writing: { name: string | null; chars: number } | null;
+  /** Waiting for the user. */
+  permission: PermissionRequest | null;
+  question: Question | null;
 };
 
 export type RunError = { message: string; retryable: boolean };
+export type RunNotice = { level: 'info' | 'warning'; text: string };
 
 export type TranscriptState = {
   messages: Message[];
   run: LiveRun | null;
   error: RunError | null;
+  notice: RunNotice | null;
 };
+
+export function newRun(sessionId: string, runId: string | null = null): LiveRun {
+  return {
+    runId,
+    sessionId,
+    messageId: null,
+    status: 'starting',
+    progress: null,
+    content: '',
+    reasoning: '',
+    tool: null,
+    writing: null,
+    permission: null,
+    question: null,
+  };
+}
 
 function placeholder(sessionId: string, id: string, parentId: string | null): Message {
   return {
@@ -54,12 +79,12 @@ function updateMessage(
   return next;
 }
 
-/** Puts a new reply right after its parent, replacing whatever followed (a regenerated version). */
-function placeReply(messages: Message[], reply: Message): Message[] {
-  if (messages.some((m) => m.id === reply.id)) return messages;
-  const parent = reply.parentId ? messages.findIndex((m) => m.id === reply.parentId) : -1;
+/** Puts a new message right after its parent, replacing whatever followed (a regenerated version). */
+function placeAfterParent(messages: Message[], message: Message): Message[] {
+  if (messages.some((m) => m.id === message.id)) return messages;
+  const parent = message.parentId ? messages.findIndex((m) => m.id === message.parentId) : -1;
   const kept = parent >= 0 ? messages.slice(0, parent + 1) : messages;
-  return [...kept, reply];
+  return [...kept, message];
 }
 
 export function applyRunEvent(state: TranscriptState, event: RunEnvelope): TranscriptState {
@@ -72,7 +97,7 @@ export function applyRunEvent(state: TranscriptState, event: RunEnvelope): Trans
     case 'snapshot': {
       let messages = state.messages;
       if (event.messageId) {
-        messages = placeReply(messages, placeholder(live.sessionId, event.messageId, null));
+        messages = placeAfterParent(messages, placeholder(live.sessionId, event.messageId, null));
         messages = updateMessage(messages, event.messageId, (m) => ({
           ...m,
           content: event.content,
@@ -80,15 +105,24 @@ export function applyRunEvent(state: TranscriptState, event: RunEnvelope): Trans
           status: 'streaming',
         }));
       }
+      // A running tool and a waiting question follow the snapshot as their own events.
       return {
         ...state,
         messages,
         run: {
           ...live,
           messageId: event.messageId,
-          status: event.state === 'starting' ? 'starting' : 'streaming',
+          status:
+            event.state === 'starting'
+              ? 'starting'
+              : event.state === 'waiting'
+                ? 'waiting'
+                : 'streaming',
           content: event.content,
           reasoning: event.reasoning,
+          tool: null,
+          permission: null,
+          question: null,
         },
       };
     }
@@ -100,7 +134,7 @@ export function applyRunEvent(state: TranscriptState, event: RunEnvelope): Trans
     case 'message_started':
       return {
         ...state,
-        messages: placeReply(
+        messages: placeAfterParent(
           state.messages,
           placeholder(live.sessionId, event.messageId, event.parentId),
         ),
@@ -110,6 +144,8 @@ export function applyRunEvent(state: TranscriptState, event: RunEnvelope): Trans
           status: 'streaming',
           content: '',
           reasoning: '',
+          tool: null,
+          writing: null,
         },
       };
     case 'reasoning_delta':
@@ -139,9 +175,52 @@ export function applyRunEvent(state: TranscriptState, event: RunEnvelope): Trans
           usage: event.usage,
           reasoningMs: event.reasoningMs,
           finishReason: event.finishReason,
+          content: event.content ?? m.content,
+          toolCalls: event.toolCalls?.length ? event.toolCalls : (m.toolCalls ?? null),
         })),
-        run: live,
+        run: { ...live, messageId: null, writing: null, progress: null },
       };
+    case 'tool_call_progress':
+      return { ...state, run: { ...live, writing: { name: event.name, chars: event.chars } } };
+    case 'tool_started':
+      return {
+        ...state,
+        run: { ...live, tool: { callId: event.callId, title: event.title }, writing: null },
+      };
+    case 'tool_finished':
+      return {
+        ...state,
+        messages: placeAfterParent(state.messages, event.message),
+        run: { ...live, tool: live.tool?.callId === event.callId ? null : live.tool },
+      };
+    case 'permission_request': {
+      const permission: PermissionRequest = {
+        requestId: event.requestId,
+        callId: event.callId,
+        tool: event.tool,
+        class: event.class,
+        title: event.title,
+        path: event.path,
+        diff: event.diff,
+        choices: event.choices,
+      };
+      return { ...state, run: { ...live, status: 'waiting', permission } };
+    }
+    case 'permission_resolved':
+      return { ...state, run: { ...live, status: 'streaming', permission: null } };
+    case 'question': {
+      const question: Question = {
+        questionId: event.questionId,
+        callId: event.callId,
+        question: event.question,
+        options: event.options,
+      };
+      return { ...state, run: { ...live, status: 'waiting', question } };
+    }
+    case 'question_answered':
+      return { ...state, run: { ...live, status: 'streaming', question: null } };
+    case 'notice':
+      return { ...state, run: live, notice: { level: event.level, text: event.text } };
     case 'error':
       return { ...state, run: live, error: { message: event.message, retryable: event.retryable } };
     case 'finished':

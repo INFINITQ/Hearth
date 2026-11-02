@@ -8,6 +8,7 @@ compile_error!("Hearth targets Windows 11 only.");
 
 mod caption;
 mod chat_commands;
+mod code_commands;
 mod commands;
 mod error;
 mod guard;
@@ -19,6 +20,7 @@ mod window;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use hearth_core::agent::Agent;
 use hearth_core::chat::{Chat, StoreResolver};
 use hearth_core::runs::RunManager;
 use hearth_core::settings::SettingsStore;
@@ -70,6 +72,14 @@ fn main() {
             chat_commands::run_cancel,
             chat_commands::runs_active,
             chat_commands::open_link,
+            code_commands::project_pick,
+            code_commands::project_open,
+            code_commands::projects_recent,
+            code_commands::project_trust,
+            code_commands::project_sessions,
+            code_commands::code_session_create,
+            code_commands::run_permission,
+            code_commands::run_answer,
         ])
         .setup(|app| {
             let data = data_dir(app.handle())?;
@@ -84,12 +94,19 @@ fn main() {
                 let _ = handle.emit_to(window::MAIN, chat_commands::RUN_STATE_EVENT, info);
             });
             let resolver = Arc::new(StoreResolver::new(store.clone()));
-            let chat = Chat::new(store.clone(), runs.clone(), resolver, settings.clone());
+            let chat = Chat::new(
+                store.clone(),
+                runs.clone(),
+                resolver.clone(),
+                settings.clone(),
+            );
+            let agent = Agent::new(store.clone(), runs.clone(), resolver, settings.clone());
 
             app.manage(settings);
             app.manage(store);
             app.manage(runs);
             app.manage(chat);
+            app.manage(agent);
             app.manage(DataDir(data.clone()));
             window::create_main(app.handle(), &data)?;
             Ok(())

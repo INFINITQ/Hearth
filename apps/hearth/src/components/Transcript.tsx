@@ -44,7 +44,7 @@ export function Transcript() {
               last={index === messages.length - 1}
             />
           ))}
-          {run && !run.messageId && <Waiting progress={run.progress} />}
+          {run?.status === 'starting' && <Waiting progress={run.progress} />}
           <RunErrorBanner />
         </div>
       </div>
@@ -65,7 +65,7 @@ export function Transcript() {
   );
 }
 
-function Waiting({ progress }: { progress: { processed: number; total: number } | null }) {
+export function Waiting({ progress }: { progress: { processed: number; total: number } | null }) {
   if (progress && progress.total > 0) {
     const percent = Math.min(100, Math.round((progress.processed / progress.total) * 100));
     return <p className="text-[13px] text-text-3">Reading the conversation… {percent}%</p>;

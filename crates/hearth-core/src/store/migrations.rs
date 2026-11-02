@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use super::{Result, StoreError};
 
-const MIGRATIONS: &[&str] = &[INITIAL];
+const MIGRATIONS: &[&str] = &[INITIAL, PROJECTS];
 
 const INITIAL: &str = r#"
 CREATE TABLE kv (
@@ -82,6 +82,21 @@ CREATE TABLE connections (
   caps TEXT,
   created_at INTEGER NOT NULL
 );
+"#;
+
+/// M3: project folders for coding sessions, and each session's frozen environment (the part of
+/// the agent's prompt that must not change between requests).
+const PROJECTS: &str = r#"
+CREATE TABLE workspaces (
+  id TEXT PRIMARY KEY,
+  path TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  name TEXT NOT NULL,
+  trusted INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  last_opened_at INTEGER NOT NULL
+);
+ALTER TABLE sessions ADD COLUMN env_snapshot TEXT;
+CREATE INDEX sessions_by_workspace ON sessions (workspace_id, archived, pinned, updated_at DESC);
 "#;
 
 pub fn apply(conn: &mut Connection) -> Result<()> {

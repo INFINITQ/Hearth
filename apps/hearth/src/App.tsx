@@ -47,18 +47,17 @@ export function App() {
   );
 }
 
-/** Keeps the sidebar lists and "writing…" spinners in step with Rust. */
+/** Keeps the sidebar lists, "working…" spinners and "needs you" dots in step with Rust. */
 function useConversations() {
   useEffect(() => {
     const chat = useChat.getState();
     void chat.loadLists();
+    void chat.loadProjects();
     void backend()
       .runsActive()
-      .then((runs) => runs.forEach((run) => useChat.getState().setBusy(run.sessionId, run.runId)));
+      .then((runs) => runs.forEach((run) => useChat.getState().setRunState(run)));
     const stopSessions = backend().onSessionsChanged(() => void useChat.getState().loadLists());
-    const stopRuns = backend().onRunState((info) =>
-      useChat.getState().setBusy(info.sessionId, info.state === 'finished' ? null : info.runId),
-    );
+    const stopRuns = backend().onRunState((info) => useChat.getState().setRunState(info));
     return () => {
       stopSessions();
       stopRuns();

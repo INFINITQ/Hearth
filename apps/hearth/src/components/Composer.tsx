@@ -11,6 +11,8 @@ type ComposerProps = {
   onStop?(): void;
   /** Extra buttons next to Attach (chat settings…). */
   tools?: ReactNode;
+  /** Shift+Tab in the box (coding sessions: the next permission mode). */
+  onShiftTab?(): void;
   autoFocus?: boolean;
   className?: string;
 };
@@ -24,6 +26,7 @@ export function Composer({
   onSend,
   onStop,
   tools,
+  onShiftTab,
   autoFocus,
   className,
 }: ComposerProps) {
@@ -66,6 +69,9 @@ export function Composer({
           } else if (event.key === 'Escape' && running) {
             event.preventDefault();
             onStop?.();
+          } else if (event.key === 'Tab' && event.shiftKey && onShiftTab) {
+            event.preventDefault();
+            onShiftTab();
           }
         }}
         className="block w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-[15px] leading-[1.55] text-text outline-none select-text placeholder:text-text-3"

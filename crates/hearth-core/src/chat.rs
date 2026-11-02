@@ -3,7 +3,7 @@
 //! Sending adds the user message under the conversation's active leaf. Editing adds a new
 //! version of a user message (a sibling). Regenerating adds a new version of a reply. The reply
 //! streams to the UI in ~33 ms batches and is saved every second, so a crash loses at most a
-//! moment of text.
+//! moment of text. The streaming loop is shared with the coding agent.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -16,7 +16,8 @@ use tokio::time::Instant;
 
 use crate::llm::think::ThinkSplitter;
 use crate::llm::{
-    ChatMessage, ChatRequest, FinishReason, LlmClient, LlmError, Sampling, StreamEvent, Usage,
+    Assembler, ChatMessage, ChatRequest, FinishReason, LlmClient, LlmError, Sampling, StreamEvent,
+    ToolCall, Usage,
 };
 use crate::runs::{Run, RunEnd, RunEvent, RunManager, RunSink};
 use crate::settings::{ModelRef, Settings, SettingsStore};
@@ -146,6 +147,28 @@ pub struct ChatParams {
     pub thinking: Option<bool>,
 }
 
+impl ChatParams {
+    pub fn of(session: &Session) -> Self {
+        session
+            .params
+            .clone()
+            .and_then(|p| serde_json::from_value(p).ok())
+            .unwrap_or_default()
+    }
+}
+
+/// The model a session uses: its own choice, else the default for its mode.
+pub fn model_for(settings: &Settings, session: &Session) -> Option<ModelRef> {
+    let own = session
+        .model_ref
+        .clone()
+        .and_then(|value| serde_json::from_value::<ModelRef>(value).ok());
+    own.or_else(|| match session.mode {
+        Mode::Chat => settings.models.chat.clone(),
+        Mode::Code => settings.models.code.clone(),
+    })
+}
+
 #[derive(Clone)]
 pub struct Chat {
     store: Arc<Store>,
@@ -164,14 +187,17 @@ enum Plan {
     },
 }
 
+/// What one streamed reply came to.
 #[derive(Default)]
-struct Outcome {
-    content: String,
-    reasoning: String,
-    reasoning_ms: Option<i64>,
-    usage: Option<Usage>,
-    finish: Option<FinishReason>,
-    error: Option<LlmError>,
+pub(crate) struct Streamed {
+    pub content: String,
+    pub reasoning: String,
+    pub reasoning_ms: Option<i64>,
+    pub usage: Option<Usage>,
+    pub finish: Option<FinishReason>,
+    /// Complete tool calls (none when the stream broke off).
+    pub tool_calls: Vec<ToolCall>,
+    pub error: Option<LlmError>,
 }
 
 /// Text waiting to be pushed to the UI.
@@ -179,11 +205,13 @@ struct Outcome {
 struct Pending {
     reasoning: String,
     content: String,
+    /// The tool call whose arguments grew since the last push: (index, name, characters).
+    call: Option<(usize, Option<String>, usize)>,
 }
 
 impl Pending {
     fn is_empty(&self) -> bool {
-        self.reasoning.is_empty() && self.content.is_empty()
+        self.reasoning.is_empty() && self.content.is_empty() && self.call.is_none()
     }
 
     fn flush(&mut self, run: &Run, message_id: &str) {
@@ -197,6 +225,14 @@ impl Pending {
             run.emit(RunEvent::ContentDelta {
                 message_id: message_id.to_owned(),
                 text: std::mem::take(&mut self.content),
+            });
+        }
+        if let Some((index, name, chars)) = self.call.take() {
+            run.emit(RunEvent::ToolCallProgress {
+                message_id: message_id.to_owned(),
+                index,
+                name,
+                chars,
             });
         }
     }
@@ -219,15 +255,7 @@ impl Chat {
 
     /// The model a session uses: its own choice, else the default for its mode.
     pub fn model_for(&self, session: &Session) -> Option<ModelRef> {
-        let own = session
-            .model_ref
-            .clone()
-            .and_then(|value| serde_json::from_value::<ModelRef>(value).ok());
-        let settings = self.settings.get();
-        own.or(match session.mode {
-            Mode::Chat => settings.models.chat,
-            Mode::Code => settings.models.code,
-        })
+        model_for(&self.settings.get(), session)
     }
 
     /// Starts a reply. Returns once the user message is saved; the reply streams to `sink`.
@@ -313,14 +341,7 @@ impl Chat {
             }
             Plan::Reply { parent } => (None, parent),
         };
-        if session.model_ref.is_none() {
-            // The conversation keeps the model it started with.
-            let patch = SessionPatch {
-                model_ref: serde_json::to_value(&model_ref).ok(),
-                ..Default::default()
-            };
-            let _ = self.store.update_session(&session.id, &patch);
-        }
+        keep_model(&self.store, &session, &model_ref);
 
         let started = StartedRun {
             run_id: run.id.clone(),
@@ -354,12 +375,13 @@ impl Chat {
             Ok(history) => history,
             Err(err) => return fail(run, "store", &err.to_string()),
         };
-        let params: ChatParams = session
-            .params
-            .clone()
-            .and_then(|p| serde_json::from_value(p).ok())
-            .unwrap_or_default();
-        let request = build_request(session, &self.settings.get(), &history, model, &params);
+        let request = build_request(
+            session,
+            &self.settings.get(),
+            &history,
+            model,
+            &ChatParams::of(session),
+        );
         let message = match self.store.insert_message(NewMessage::assistant(
             &session.id,
             Some(parent),
@@ -373,9 +395,9 @@ impl Chat {
             parent_id: Some(parent.to_owned()),
         });
         // Named as soon as it starts, so the sidebar shows it right away.
-        self.auto_title(run, session);
+        auto_title(&self.store, run, &session.id);
 
-        let outcome = self.stream_into(run, &message.id, model, &request).await;
+        let outcome = stream_reply(&self.store, run, &message.id, model, &request).await;
 
         let (status, end) = match &outcome.error {
             None => (MessageStatus::Complete, RunEnd::Completed),
@@ -417,146 +439,181 @@ impl Chat {
             finish_reason,
             usage: outcome.usage,
             reasoning_ms: outcome.reasoning_ms,
+            content: None,
+            tool_calls: Vec::new(),
         });
         end
     }
+}
 
-    async fn stream_into(
-        &self,
-        run: &Run,
-        message_id: &str,
-        model: &ResolvedModel,
-        request: &ChatRequest,
-    ) -> Outcome {
-        let mut out = Outcome::default();
-        let mut stream = match model.client.stream_chat(request, run.cancel.clone()).await {
-            Ok(stream) => stream,
-            Err(err) => {
-                out.error = Some(err);
-                return out;
-            }
-        };
-        let mut splitter = ThinkSplitter::new(false);
-        let mut pending = Pending::default();
-        let mut thinking_since: Option<Instant> = None;
-        let mut thinking_until: Option<Instant> = None;
-        let mut last_emit = Instant::now();
-        let mut last_save = Instant::now();
-
-        loop {
-            let item = if pending.is_empty() {
-                Some(stream.next().await)
-            } else {
-                tokio::select! {
-                    item = stream.next() => Some(item),
-                    _ = tokio::time::sleep_until(last_emit + BATCH) => None,
-                }
-            };
-            match item {
-                None => {}
-                Some(None) => break,
-                Some(Some(Err(err))) => {
-                    out.error = Some(err);
-                    break;
-                }
-                Some(Some(Ok(event))) => match event {
-                    StreamEvent::Reasoning(text) => {
-                        thinking_since.get_or_insert_with(Instant::now);
-                        out.reasoning.push_str(&text);
-                        pending.reasoning.push_str(&text);
-                    }
-                    StreamEvent::Content(text) => {
-                        let split = splitter.push(&text);
-                        if !split.reasoning.is_empty() {
-                            thinking_since.get_or_insert_with(Instant::now);
-                            out.reasoning.push_str(&split.reasoning);
-                            pending.reasoning.push_str(&split.reasoning);
-                        }
-                        if !split.content.is_empty() {
-                            if thinking_since.is_some() && thinking_until.is_none() {
-                                thinking_until = Some(Instant::now());
-                            }
-                            out.content.push_str(&split.content);
-                            pending.content.push_str(&split.content);
-                        }
-                    }
-                    StreamEvent::PromptProgress {
-                        processed,
-                        total,
-                        cached,
-                    } => {
-                        run.emit(RunEvent::PromptProgress {
-                            processed,
-                            total,
-                            cached,
-                        });
-                    }
-                    StreamEvent::Usage(usage) => out.usage = Some(usage),
-                    StreamEvent::Finish(reason) => out.finish = Some(reason),
-                    // Chats offer no tools yet (web search arrives with M8).
-                    StreamEvent::ToolCall { .. } => {}
-                },
-            }
-            if last_emit.elapsed() >= BATCH {
-                pending.flush(run, message_id);
-                last_emit = Instant::now();
-            }
-            if last_save.elapsed() >= SAVE_EVERY {
-                let reasoning = (!out.reasoning.is_empty()).then_some(out.reasoning.as_str());
-                let _ = self
-                    .store
-                    .update_streaming(message_id, &out.content, reasoning);
-                last_save = Instant::now();
-            }
-        }
-        let rest = splitter.finish();
-        out.reasoning.push_str(&rest.reasoning);
-        pending.reasoning.push_str(&rest.reasoning);
-        out.content.push_str(&rest.content);
-        pending.content.push_str(&rest.content);
-        pending.flush(run, message_id);
-        out.reasoning_ms = thinking_since.map(|since| {
-            thinking_until
-                .unwrap_or_else(Instant::now)
-                .duration_since(since)
-                .as_millis() as i64
-        });
-        out
-    }
-
-    /// Names a new conversation after its first message (unless the user already named it).
-    fn auto_title(&self, run: &Run, session: &Session) {
-        let Ok(current) = self.store.session(&session.id) else {
-            return;
-        };
-        if current.title_source != "none" {
-            return;
-        }
-        let Ok(path) = self.store.active_path(&session.id) else {
-            return;
-        };
-        let Some(first) = path.iter().find(|m| m.role == MessageRole::User) else {
-            return;
-        };
-        let title = title_from(&first.content);
-        if title.is_empty() {
-            return;
-        }
+/// A conversation keeps the model it started with.
+pub(crate) fn keep_model(store: &Store, session: &Session, model_ref: &ModelRef) {
+    if session.model_ref.is_none() {
         let patch = SessionPatch {
-            title: Some(title.clone()),
-            title_source: Some("auto".into()),
+            model_ref: serde_json::to_value(model_ref).ok(),
             ..Default::default()
         };
-        if self.store.update_session(&session.id, &patch).is_ok() {
-            run.emit(RunEvent::TitleChanged {
-                session_id: session.id.clone(),
-                title,
-            });
-        }
+        let _ = store.update_session(&session.id, &patch);
     }
 }
 
-fn fail(run: &Run, code: &str, message: &str) -> RunEnd {
+/// Streams one reply into an assistant message: batched to the UI, saved every second.
+pub(crate) async fn stream_reply(
+    store: &Store,
+    run: &Run,
+    message_id: &str,
+    model: &ResolvedModel,
+    request: &ChatRequest,
+) -> Streamed {
+    let mut out = Streamed::default();
+    let mut stream = match model.client.stream_chat(request, run.cancel.clone()).await {
+        Ok(stream) => stream,
+        Err(err) => {
+            out.error = Some(err);
+            return out;
+        }
+    };
+    let mut splitter = ThinkSplitter::new(false);
+    let mut calls = Assembler::new();
+    let mut call_sizes: Vec<(Option<String>, usize)> = Vec::new();
+    let mut pending = Pending::default();
+    let mut thinking_since: Option<Instant> = None;
+    let mut thinking_until: Option<Instant> = None;
+    let mut last_emit = Instant::now();
+    let mut last_save = Instant::now();
+
+    loop {
+        let item = if pending.is_empty() {
+            Some(stream.next().await)
+        } else {
+            tokio::select! {
+                item = stream.next() => Some(item),
+                _ = tokio::time::sleep_until(last_emit + BATCH) => None,
+            }
+        };
+        match item {
+            None => {}
+            Some(None) => break,
+            Some(Some(Err(err))) => {
+                out.error = Some(err);
+                break;
+            }
+            Some(Some(Ok(event))) => match event {
+                StreamEvent::Reasoning(text) => {
+                    thinking_since.get_or_insert_with(Instant::now);
+                    out.reasoning.push_str(&text);
+                    pending.reasoning.push_str(&text);
+                }
+                StreamEvent::Content(text) => {
+                    let split = splitter.push(&text);
+                    if !split.reasoning.is_empty() {
+                        thinking_since.get_or_insert_with(Instant::now);
+                        out.reasoning.push_str(&split.reasoning);
+                        pending.reasoning.push_str(&split.reasoning);
+                    }
+                    if !split.content.is_empty() {
+                        if thinking_since.is_some() && thinking_until.is_none() {
+                            thinking_until = Some(Instant::now());
+                        }
+                        out.content.push_str(&split.content);
+                        pending.content.push_str(&split.content);
+                    }
+                }
+                StreamEvent::PromptProgress {
+                    processed,
+                    total,
+                    cached,
+                } => {
+                    run.emit(RunEvent::PromptProgress {
+                        processed,
+                        total,
+                        cached,
+                    });
+                }
+                StreamEvent::Usage(usage) => out.usage = Some(usage),
+                StreamEvent::Finish(reason) => out.finish = Some(reason),
+                StreamEvent::ToolCall {
+                    index,
+                    ref name,
+                    ref arguments,
+                    ..
+                } => {
+                    if thinking_since.is_some() && thinking_until.is_none() {
+                        thinking_until = Some(Instant::now());
+                    }
+                    if call_sizes.len() <= index {
+                        call_sizes.resize(index + 1, (None, 0));
+                    }
+                    let size = &mut call_sizes[index];
+                    if let Some(name) = name.as_ref().filter(|n| !n.is_empty()) {
+                        size.0 = Some(name.clone());
+                    }
+                    size.1 += arguments.chars().count();
+                    pending.call = Some((index, size.0.clone(), size.1));
+                    calls.push(&event);
+                }
+            },
+        }
+        if last_emit.elapsed() >= BATCH {
+            pending.flush(run, message_id);
+            last_emit = Instant::now();
+        }
+        if last_save.elapsed() >= SAVE_EVERY {
+            let reasoning = (!out.reasoning.is_empty()).then_some(out.reasoning.as_str());
+            let _ = store.update_streaming(message_id, &out.content, reasoning);
+            last_save = Instant::now();
+        }
+    }
+    let rest = splitter.finish();
+    out.reasoning.push_str(&rest.reasoning);
+    pending.reasoning.push_str(&rest.reasoning);
+    out.content.push_str(&rest.content);
+    pending.content.push_str(&rest.content);
+    pending.flush(run, message_id);
+    out.reasoning_ms = thinking_since.map(|since| {
+        thinking_until
+            .unwrap_or_else(Instant::now)
+            .duration_since(since)
+            .as_millis() as i64
+    });
+    if out.error.is_none() {
+        out.tool_calls = calls.finish().tool_calls;
+    }
+    out
+}
+
+/// Names a new conversation after its first message (unless the user already named it).
+pub(crate) fn auto_title(store: &Store, run: &Run, session_id: &str) {
+    let Ok(current) = store.session(session_id) else {
+        return;
+    };
+    if current.title_source != "none" {
+        return;
+    }
+    let Ok(path) = store.active_path(session_id) else {
+        return;
+    };
+    let Some(first) = path.iter().find(|m| m.role == MessageRole::User) else {
+        return;
+    };
+    let title = title_from(&first.content);
+    if title.is_empty() {
+        return;
+    }
+    let patch = SessionPatch {
+        title: Some(title.clone()),
+        title_source: Some("auto".into()),
+        ..Default::default()
+    };
+    if store.update_session(session_id, &patch).is_ok() {
+        run.emit(RunEvent::TitleChanged {
+            session_id: session_id.to_owned(),
+            title,
+        });
+    }
+}
+
+pub(crate) fn fail(run: &Run, code: &str, message: &str) -> RunEnd {
     run.emit(RunEvent::Error {
         code: code.into(),
         message: message.into(),
@@ -565,12 +622,33 @@ fn fail(run: &Run, code: &str, message: &str) -> RunEnd {
     RunEnd::Failed
 }
 
-fn status_name(status: MessageStatus) -> &'static str {
+pub(crate) fn status_name(status: MessageStatus) -> &'static str {
     match status {
         MessageStatus::Streaming => "streaming",
         MessageStatus::Complete => "complete",
         MessageStatus::Interrupted => "interrupted",
         MessageStatus::Error => "error",
+    }
+}
+
+/// Sampling from the session, plus llama.cpp's extras when the server understands them.
+pub(crate) fn apply_params(request: &mut ChatRequest, model: &ResolvedModel, params: &ChatParams) {
+    request.sampling = Sampling {
+        temperature: params.temperature,
+        top_p: params.top_p,
+        top_k: params.top_k,
+        min_p: params.min_p,
+        ..Default::default()
+    };
+    request.max_tokens = params.max_tokens;
+    if model.llama_extensions {
+        request.cache_prompt = Some(true);
+        request.return_progress = Some(true);
+        if let Some(thinking) = params.thinking {
+            let mut kwargs = Map::new();
+            kwargs.insert("enable_thinking".into(), json!(thinking));
+            request.chat_template_kwargs = Some(kwargs);
+        }
     }
 }
 
@@ -615,25 +693,9 @@ fn build_request(
     let mut request = ChatRequest {
         model: model.model.clone(),
         messages,
-        sampling: Sampling {
-            temperature: params.temperature,
-            top_p: params.top_p,
-            top_k: params.top_k,
-            min_p: params.min_p,
-            ..Default::default()
-        },
-        max_tokens: params.max_tokens,
         ..Default::default()
     };
-    if model.llama_extensions {
-        request.cache_prompt = Some(true);
-        request.return_progress = Some(true);
-        if let Some(thinking) = params.thinking {
-            let mut kwargs = Map::new();
-            kwargs.insert("enable_thinking".into(), json!(thinking));
-            request.chat_template_kwargs = Some(kwargs);
-        }
-    }
+    apply_params(&mut request, model, params);
     request
 }
 
@@ -669,7 +731,7 @@ pub fn title_from(text: &str) -> String {
 }
 
 /// Today's date (UTC) as YYYY-MM-DD.
-fn today() -> String {
+pub(crate) fn today() -> String {
     let days = crate::now_ms().div_euclid(86_400_000);
     let (year, month, day) = civil_from_days(days);
     format!("{year:04}-{month:02}-{day:02}")

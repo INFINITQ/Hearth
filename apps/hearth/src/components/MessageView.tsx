@@ -31,7 +31,7 @@ export function MessageView({
   );
 }
 
-function CopyButton({ text }: { text: string }) {
+export function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <IconButton
@@ -142,7 +142,8 @@ function EditBox({ message, onDone }: { message: Message; onDone(): void }) {
   );
 }
 
-function stats(message: Message): string {
+/** Model · speed · tokens, under a finished reply. */
+export function stats(message: Message): string {
   const parts: string[] = [];
   if (message.modelLabel) parts.push(message.modelLabel);
   const speed = message.usage?.predictedPerSecond;

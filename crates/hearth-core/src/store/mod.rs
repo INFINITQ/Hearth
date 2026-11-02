@@ -8,6 +8,7 @@
 mod connections;
 mod messages;
 mod migrations;
+mod projects;
 mod search;
 mod sessions;
 
@@ -19,6 +20,7 @@ use serde_json::Value;
 
 pub use connections::{Connection, ConnectionInput};
 pub use messages::{Message, MessageFinish, MessageRole, MessageStatus, NewMessage};
+pub use projects::Project;
 pub use search::SearchHit;
 pub use sessions::{Mode, Session, SessionPatch, SessionSummary};
 

@@ -14,6 +14,7 @@ import { type Mode, useApp } from '../stores/app';
 import { useChat } from '../stores/chat';
 import { HearthMark } from './HearthMark';
 import { SessionList } from './SessionList';
+import { ProjectSwitcher } from './code/ProjectSwitcher';
 import { IconButton } from './ui/Button';
 import { Segmented } from './ui/Segmented';
 
@@ -64,6 +65,7 @@ export function Sidebar() {
           {mode === 'code' ? 'New session' : 'New chat'}
           <kbd className="ml-auto font-sans text-[11px] font-normal text-text-3">Ctrl N</kbd>
         </button>
+        {mode === 'code' && <ProjectSwitcher />}
         <SearchBox mode={mode} />
       </div>
 

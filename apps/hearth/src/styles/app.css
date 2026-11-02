@@ -39,6 +39,10 @@
   --caption-press: rgba(31, 29, 26, 0.1);
   --segment-track: rgba(31, 29, 26, 0.06);
   --segment-thumb: #ffffff;
+  --diff-add: rgba(21, 128, 61, 0.09);
+  --diff-add-mark: #15803d;
+  --diff-del: rgba(220, 38, 38, 0.08);
+  --diff-del-mark: #b91c1c;
 }
 
 [data-theme='dark'] {
@@ -69,6 +73,10 @@
   --caption-press: rgba(255, 255, 255, 0.1);
   --segment-track: rgba(0, 0, 0, 0.28);
   --segment-thumb: #34312d;
+  --diff-add: rgba(74, 222, 128, 0.1);
+  --diff-add-mark: #4ade80;
+  --diff-del: rgba(248, 113, 113, 0.11);
+  --diff-del-mark: #f87171;
 }
 
 /* The shadcn-style tokens Streamdown's code blocks and tables use, mapped onto Hearth's palette. */
@@ -273,6 +281,60 @@
   }
 }
 
+/* ── Coding sessions: diffs ───────────────────────────────────────────────────────────────── */
+.diff {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  user-select: text;
+}
+
+.diff-line {
+  display: grid;
+  grid-template-columns: 3.6em 1.6em minmax(0, 1fr);
+}
+
+.diff-line > span:first-child {
+  padding-right: 0.5em;
+  text-align: right;
+  color: var(--text-3);
+  user-select: none;
+}
+
+.diff-line > span:nth-child(2) {
+  text-align: center;
+  color: var(--text-3);
+  user-select: none;
+}
+
+.diff-line > code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding-right: 12px;
+}
+
+.diff-add {
+  background: var(--diff-add);
+}
+
+.diff-add > span:nth-child(2) {
+  color: var(--diff-add-mark);
+}
+
+.diff-del {
+  background: var(--diff-del);
+}
+
+.diff-del > span:nth-child(2) {
+  color: var(--diff-del-mark);
+}
+
+.diff-gap {
+  padding: 1px 0 1px 3.6em;
+  color: var(--text-3);
+  user-select: none;
+}
+
 /* ── Menus, popovers, dialogs (Radix) ─────────────────────────────────────────────────────── */
 .menu,
 .popover,
@@ -311,6 +373,18 @@
 
 .menu-item[data-highlighted] {
   background: var(--surface-2);
+}
+
+/* A menu item with a second line of explanation. */
+.menu-item.menu-item-tall {
+  height: auto;
+  align-items: flex-start;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+.menu-item.menu-item-tall svg {
+  margin-top: 2px;
 }
 
 .menu-danger,

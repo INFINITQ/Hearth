@@ -9,6 +9,9 @@ import {
   type ConnectionInput,
   DEFAULT_SETTINGS,
   type Mode,
+  type PermissionChoice,
+  type PermissionMode,
+  type Project,
   type RunEnvelope,
   type RunInfo,
   type SearchHit,
@@ -65,6 +68,21 @@ export interface ChatBackend {
   onSessionsChanged(listener: () => void): () => void;
   onRunState(listener: (info: RunInfo) => void): () => void;
   openLink(url: string): Promise<void>;
+
+  /** Shows the folder picker; null if cancelled. */
+  projectPick(): Promise<Project | null>;
+  projectOpen(path: string): Promise<Project>;
+  projectsRecent(): Promise<Project[]>;
+  projectTrust(id: string): Promise<Project>;
+  projectSessions(projectId: string): Promise<SessionSummary[]>;
+  codeSessionCreate(projectId: string, permissionMode: PermissionMode): Promise<Session>;
+  /** Answers a permission prompt; false if it was already answered or the run ended. */
+  runPermission(
+    requestId: string,
+    decision: PermissionChoice['id'],
+    note?: string | null,
+  ): Promise<boolean>;
+  runAnswer(questionId: string, answer: string): Promise<boolean>;
 }
 
 /**
@@ -152,6 +170,16 @@ export function tauriBackend(): Backend {
     onSessionsChanged: (listener) => subscribe<null>('hearth://sessions', () => listener()),
     onRunState: (listener) => subscribe<RunInfo>('hearth://run-state', listener),
     openLink: (url) => invoke('open_link', { url }),
+    projectPick: () => invoke('project_pick'),
+    projectOpen: (path) => invoke('project_open', { path }),
+    projectsRecent: () => invoke('projects_recent'),
+    projectTrust: (id) => invoke('project_trust', { id }),
+    projectSessions: (projectId) => invoke('project_sessions', { projectId }),
+    codeSessionCreate: (projectId, permissionMode) =>
+      invoke('code_session_create', { projectId, permissionMode }),
+    runPermission: (requestId, decision, note) =>
+      invoke('run_permission', { requestId, reply: { decision, note: note ?? null } }),
+    runAnswer: (questionId, answer) => invoke('run_answer', { questionId, answer }),
 
     window: {
       minimize: () => void win.minimize(),

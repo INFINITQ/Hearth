@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use hearth_core::agent::Agent;
 use hearth_core::chat::{Chat, ChatAction, StartedRun};
 use hearth_core::llm::LlmClient;
 use hearth_core::runs::{RunEnvelope, RunInfo, RunManager, RunSink};
@@ -41,7 +42,7 @@ fn parse_mode(mode: &str) -> Result<Mode> {
     Mode::parse(mode).ok_or_else(|| Error::Invalid(format!("unknown mode {mode}")))
 }
 
-fn sessions_changed(app: &AppHandle<Wry>) {
+pub(crate) fn sessions_changed(app: &AppHandle<Wry>) {
     let _ = app.emit_to(window::MAIN, SESSIONS_EVENT, ());
 }
 
@@ -142,10 +143,12 @@ pub async fn session_delete(
     app: AppHandle<Wry>,
     store: State<'_, Arc<Store>>,
     runs: State<'_, Arc<RunManager>>,
+    agent: State<'_, Agent>,
     id: String,
 ) -> Result<()> {
     runs.cancel_session(&id);
     store.delete_session(&id)?;
+    agent.forget(&id);
     sessions_changed(&app);
     Ok(())
 }
@@ -315,18 +318,29 @@ pub struct RunStartArgs {
     action: ChatAction,
 }
 
+/// Starts a chat reply, or the agent on a task in a coding session.
 #[tauri::command]
 pub async fn run_start(
     app: AppHandle<Wry>,
+    store: State<'_, Arc<Store>>,
     chat: State<'_, Chat>,
+    agent: State<'_, Agent>,
     args: RunStartArgs,
     channel: Channel<RunEnvelope>,
 ) -> Result<StartedRun> {
-    let started = chat.start(
-        &args.session_id,
-        args.action,
-        Arc::new(ChannelSink(channel)),
-    )?;
+    let sink = Arc::new(ChannelSink(channel));
+    let started = match store.session(&args.session_id)?.mode {
+        Mode::Chat => chat.start(&args.session_id, args.action, sink)?,
+        Mode::Code => match args.action {
+            ChatAction::Send { text } => agent.start(&args.session_id, &text, sink)?,
+            _ => {
+                return Err(Error::Invalid(
+                    "Editing or regenerating earlier messages isn't available in coding sessions yet."
+                        .into(),
+                ));
+            }
+        },
+    };
     sessions_changed(&app);
     Ok(started)
 }

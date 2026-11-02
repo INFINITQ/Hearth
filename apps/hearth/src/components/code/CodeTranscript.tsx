@@ -1,0 +1,241 @@
+import { ArrowDown, Info, LoaderCircle, TriangleAlert, X } from 'lucide-react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { LiveRun, RunNotice } from '../../lib/runReducer';
+import { answersByStep } from '../../lib/toolCalls';
+import type { Message, ToolCall } from '../../lib/types';
+import { useChat } from '../../stores/chat';
+import { Markdown } from '../Markdown';
+import { CopyButton, stats } from '../MessageView';
+import { ThinkingBlock } from '../ThinkingBlock';
+import { RunErrorBanner } from '../Transcript';
+import { IconButton } from '../ui/Button';
+import { type CallState, ToolCard } from './ToolCard';
+import { PermissionCard } from './PermissionCard';
+import { QuestionCard } from './QuestionCard';
+
+const NO_ANSWERS = new Map<string, Message>();
+
+function stateOf(call: ToolCall, answer: Message | undefined, run: LiveRun | null): CallState {
+  if (answer) return answer.toolStatus ?? 'ok';
+  if (run?.permission?.callId === call.id || run?.question?.callId === call.id) return 'waiting';
+  if (run?.tool?.callId === call.id) return 'running';
+  return run ? 'queued' : 'not_run';
+}
+
+/** A coding session: your requests, the agent's steps and its tool calls, and what it needs. */
+export function CodeTranscript() {
+  const messages = useChat((s) => s.messages);
+  const run = useChat((s) => s.run);
+  const notice = useChat((s) => s.notice);
+  const steps = useMemo(() => answersByStep(messages), [messages]);
+  const box = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  const [away, setAway] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [messages, run]);
+
+  const onScroll = () => {
+    const el = box.current;
+    if (!el) return;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    stick.current = near;
+    setAway(!near);
+  };
+
+  const lastAssistant = messages.findLast((m) => m.role === 'assistant')?.id;
+
+  return (
+    <div className="relative min-h-0 flex-1">
+      <div
+        ref={box}
+        onScroll={onScroll}
+        className="h-full overflow-y-auto"
+        role="log"
+        aria-label="Session"
+      >
+        <div className="mx-auto max-w-[800px] space-y-5 px-6 pb-8 pt-8">
+          {messages.map((message) =>
+            message.role === 'user' ? (
+              <UserTask key={message.id} message={message} />
+            ) : message.role === 'assistant' ? (
+              <AgentStep
+                key={message.id}
+                message={message}
+                answers={steps.get(message.id) ?? NO_ANSWERS}
+                run={run}
+                last={message.id === lastAssistant}
+              />
+            ) : null,
+          )}
+          <LiveStatus run={run} messages={messages} />
+          {run?.permission && (
+            <PermissionCard key={run.permission.requestId} request={run.permission} />
+          )}
+          {run?.question && <QuestionCard key={run.question.questionId} question={run.question} />}
+          {notice && <NoticeBanner notice={notice} />}
+          <RunErrorBanner />
+        </div>
+      </div>
+      {away && (
+        <button
+          type="button"
+          aria-label="Jump to latest"
+          onClick={() => {
+            stick.current = true;
+            box.current?.scrollTo({ top: box.current.scrollHeight, behavior: 'smooth' });
+          }}
+          className="absolute bottom-3 left-1/2 grid size-8 -translate-x-1/2 place-items-center rounded-full bg-surface text-text-2 shadow-pop ring-1 ring-line hover:text-text"
+        >
+          <ArrowDown className="size-4" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function UserTask({ message }: { message: Message }) {
+  return (
+    <div className="group flex flex-col items-end pt-1" data-role="user">
+      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-[18px] bg-surface-2 px-4 py-2.5 text-[15px] leading-[1.6] select-text">
+        {message.content}
+      </div>
+      <div className="mt-1 flex items-center opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100">
+        <CopyButton text={message.content} />
+      </div>
+    </div>
+  );
+}
+
+function AgentStep({
+  message,
+  answers,
+  run,
+  last,
+}: {
+  message: Message;
+  answers: Map<string, Message>;
+  run: LiveRun | null;
+  last: boolean;
+}) {
+  const streaming = run?.messageId === message.id && message.status === 'streaming';
+  const calls = message.toolCalls ?? [];
+  const reasoning = message.reasoning ?? '';
+  const info = stats(message);
+  const final = !streaming && !calls.length && message.status === 'complete' && !!message.content;
+  if (!message.content && !reasoning && !calls.length && message.status !== 'error') {
+    return message.status === 'interrupted' ? (
+      <p className="text-[12.5px] text-text-3" data-role="assistant">
+        Stopped
+      </p>
+    ) : null;
+  }
+  // Steps that are only tool calls sit close to the step before.
+  const toolsOnly = !message.content && !reasoning && calls.length > 0;
+  return (
+    <div
+      className={toolsOnly ? 'group -mt-3.5' : 'group'}
+      data-role="assistant"
+      data-status={message.status}
+    >
+      {reasoning && (
+        <ThinkingBlock
+          text={reasoning}
+          ms={message.reasoningMs}
+          live={streaming && !message.content && !calls.length}
+        />
+      )}
+      {message.content && <Markdown text={message.content} streaming={streaming} />}
+      {calls.length > 0 && (
+        <div className={message.content ? 'mt-2.5 space-y-0.5' : 'space-y-0.5'}>
+          {calls.map((call) => {
+            const answer = answers.get(call.id);
+            return (
+              <ToolCard
+                key={call.id}
+                call={call}
+                answer={answer}
+                state={stateOf(call, answer, run)}
+                liveTitle={run?.tool?.callId === call.id ? run.tool.title : undefined}
+              />
+            );
+          })}
+        </div>
+      )}
+      {message.status === 'error' && (
+        <div className="mt-2 flex items-start gap-2 rounded-card bg-danger-soft px-3.5 py-2.5 text-[13.5px] text-danger">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+          <span className="min-w-0 flex-1 select-text">{message.error ?? 'This step failed.'}</span>
+        </div>
+      )}
+      {message.status === 'interrupted' && (
+        <p className="mt-2 text-[12.5px] text-text-3">Stopped</p>
+      )}
+      {final && (
+        <div
+          className={
+            last
+              ? 'mt-1.5 flex items-center'
+              : 'mt-1.5 flex items-center opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100'
+          }
+        >
+          <CopyButton text={message.content} />
+          {info && <span className="ml-2 truncate text-[12px] text-text-3">{info}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** What the agent is doing when nothing else on screen shows it. */
+function LiveStatus({ run, messages }: { run: LiveRun | null; messages: Message[] }) {
+  if (!run || run.permission || run.question || run.tool) return null;
+  let text = 'Thinking…';
+  if (run.writing) {
+    const size =
+      run.writing.chars >= 1000 ? `${(run.writing.chars / 1000).toFixed(1)}k` : run.writing.chars;
+    text = `Writing ${run.writing.name ?? 'a tool call'} · ${size} characters`;
+  } else {
+    const live = run.messageId ? messages.find((m) => m.id === run.messageId) : undefined;
+    if (live && (live.content || live.reasoning)) return null;
+    if (run.progress && run.progress.total > 0) {
+      const percent = Math.min(
+        100,
+        Math.round((run.progress.processed / run.progress.total) * 100),
+      );
+      text = `Reading the session… ${percent}%`;
+    }
+  }
+  return (
+    <div className="flex items-center gap-2 px-2 text-[13px] text-text-2" aria-live="polite">
+      <LoaderCircle className="size-3.5 animate-spin text-accent" />
+      <span className="thinking-shimmer">{text}</span>
+    </div>
+  );
+}
+
+function NoticeBanner({ notice }: { notice: RunNotice }) {
+  const warning = notice.level === 'warning';
+  return (
+    <div
+      role="status"
+      className={
+        warning
+          ? 'flex items-start gap-2.5 rounded-card bg-accent-soft px-4 py-3 text-[13.5px] text-accent-text'
+          : 'flex items-start gap-2.5 rounded-card bg-surface-2 px-4 py-3 text-[13.5px] text-text-2'
+      }
+    >
+      {warning ? (
+        <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+      ) : (
+        <Info className="mt-0.5 size-4 shrink-0" />
+      )}
+      <p className="min-w-0 flex-1 select-text">{notice.text}</p>
+      <IconButton label="Dismiss" onClick={() => useChat.getState().dismissNotice()}>
+        <X />
+      </IconButton>
+    </div>
+  );
+}

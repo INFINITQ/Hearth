@@ -89,6 +89,11 @@ pub fn test_save_path() -> Option<PathBuf> {
     test_value("HEARTH_TEST_SAVE_PATH").map(PathBuf::from)
 }
 
+/// `HEARTH_TEST_PICK_FOLDER`: the folder "Open folder…" picks in tests.
+pub fn test_pick_folder() -> Option<PathBuf> {
+    test_value("HEARTH_TEST_PICK_FOLDER").map(PathBuf::from)
+}
+
 /// `HEARTH_TEST_LINKS`: links the app would open are appended to this file instead.
 pub fn test_links_file() -> Option<PathBuf> {
     test_value("HEARTH_TEST_LINKS").map(PathBuf::from)

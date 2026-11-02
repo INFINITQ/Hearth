@@ -19,14 +19,20 @@ export function SessionList({ mode }: { mode: Mode }) {
   const list = useChat((s) => s.lists[mode]);
   const current = useChat((s) => s.session?.id);
   const busy = useChat((s) => s.busy);
+  const waiting = useChat((s) => s.waiting);
   const query = useChat((s) => s.query);
   const hits = useChat((s) => s.hits);
+  const hasProject = useChat((s) => s.project !== null);
 
   if (query.trim()) return <SearchResults hits={hits} />;
   if (!list.length) {
     return (
       <p className="px-2.5 py-1.5 text-[13px] text-text-3">
-        {mode === 'code' ? 'No coding sessions yet' : 'No conversations yet'}
+        {mode === 'chat'
+          ? 'No conversations yet'
+          : hasProject
+            ? 'No sessions in this project yet'
+            : 'Open a project to see its sessions'}
       </p>
     );
   }
@@ -41,6 +47,7 @@ export function SessionList({ mode }: { mode: Mode }) {
               summary={summary}
               active={summary.id === current}
               busy={!!busy[summary.id]}
+              waiting={!!waiting[summary.id]}
             />
           ))}
         </div>
@@ -53,10 +60,12 @@ function SessionRow({
   summary,
   active,
   busy,
+  waiting,
 }: {
   summary: SessionSummary;
   active: boolean;
   busy: boolean;
+  waiting: boolean;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -100,11 +109,20 @@ function SessionRow({
           <span className="truncate">{title}</span>
         </button>
       )}
-      {busy && (
-        <LoaderCircle
-          className="mr-2 size-3.5 shrink-0 animate-spin text-accent"
-          aria-label="Writing"
+      {waiting ? (
+        <span
+          className="mr-2.5 size-2 shrink-0 rounded-full bg-accent"
+          role="img"
+          aria-label="Needs your answer"
+          title="Needs your answer"
         />
+      ) : (
+        busy && (
+          <LoaderCircle
+            className="mr-2 size-3.5 shrink-0 animate-spin text-accent"
+            aria-label="Writing"
+          />
+        )
       )}
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>

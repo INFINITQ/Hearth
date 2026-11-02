@@ -51,6 +51,9 @@ pub struct Session {
     pub archived: bool,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Coding sessions: the environment part of the agent's prompt, frozen at the first task.
+    #[serde(skip)]
+    pub env_snapshot: Option<String>,
 }
 
 /// What the sidebar needs about a session.
@@ -80,7 +83,7 @@ pub struct SessionPatch {
 }
 
 const COLUMNS: &str = "id, mode, title, title_source, workspace_id, model_ref, params, persona, \
-    permission_mode, search_mode, active_leaf_id, pinned, archived, created_at, updated_at";
+    permission_mode, search_mode, active_leaf_id, pinned, archived, created_at, updated_at, env_snapshot";
 
 fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
     let mode: String = row.get(1)?;
@@ -100,6 +103,18 @@ fn row_to_session(row: &Row) -> rusqlite::Result<Session> {
         archived: row.get(12)?,
         created_at: row.get(13)?,
         updated_at: row.get(14)?,
+        env_snapshot: row.get(15)?,
+    })
+}
+
+fn row_to_summary(row: &Row) -> rusqlite::Result<SessionSummary> {
+    let mode: String = row.get(1)?;
+    Ok(SessionSummary {
+        id: row.get(0)?,
+        mode: Mode::parse(&mode).unwrap_or(Mode::Chat),
+        title: row.get(2)?,
+        pinned: row.get(3)?,
+        updated_at: row.get(4)?,
     })
 }
 
@@ -124,6 +139,22 @@ impl Store {
         session_in(&conn, &id)
     }
 
+    /// A coding session in a project, with its permission mode (`None`: the default).
+    pub fn create_code_session(
+        &self,
+        project_id: &str,
+        permission_mode: Option<&str>,
+    ) -> Result<Session> {
+        let conn = self.conn();
+        let id = new_id();
+        conn.execute(
+            "INSERT INTO sessions (id, mode, workspace_id, permission_mode, created_at, updated_at)
+             VALUES (?1, 'code', ?2, ?3, ?4, ?4)",
+            params![id, project_id, permission_mode, now_ms()],
+        )?;
+        session_in(&conn, &id)
+    }
+
     pub fn session(&self, id: &str) -> Result<Session> {
         session_in(&self.conn(), id)
     }
@@ -136,17 +167,42 @@ impl Store {
              WHERE mode = ?1 AND archived = 0
              ORDER BY pinned DESC, updated_at DESC, id DESC LIMIT ?2 OFFSET ?3",
         )?;
-        let rows =
-            statement.query_map(params![mode.as_str(), limit as i64, offset as i64], |row| {
-                Ok(SessionSummary {
-                    id: row.get(0)?,
-                    mode,
-                    title: row.get(2)?,
-                    pinned: row.get(3)?,
-                    updated_at: row.get(4)?,
-                })
-            })?;
+        let rows = statement.query_map(
+            params![mode.as_str(), limit as i64, offset as i64],
+            row_to_summary,
+        )?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// A project's coding sessions, in sidebar order.
+    pub fn project_sessions(
+        &self,
+        project_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SessionSummary>> {
+        let conn = self.conn();
+        let mut statement = conn.prepare(
+            "SELECT id, mode, title, pinned, updated_at FROM sessions
+             WHERE workspace_id = ?1 AND mode = 'code' AND archived = 0
+             ORDER BY pinned DESC, updated_at DESC, id DESC LIMIT ?2 OFFSET ?3",
+        )?;
+        let rows = statement.query_map(
+            params![project_id, limit as i64, offset as i64],
+            row_to_summary,
+        )?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn set_env_snapshot(&self, id: &str, snapshot: &str) -> Result<()> {
+        let changed = self.conn().execute(
+            "UPDATE sessions SET env_snapshot = ?1 WHERE id = ?2",
+            params![snapshot, id],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::NotFound("conversation"));
+        }
+        Ok(())
     }
 
     pub fn update_session(&self, id: &str, patch: &SessionPatch) -> Result<Session> {

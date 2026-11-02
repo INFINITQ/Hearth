@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "hearth-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@hearth/app", "dev:web"],
+      "port": 5180
+    }
+  ]
+}
