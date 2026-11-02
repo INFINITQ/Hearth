@@ -268,6 +268,75 @@ test('a long chat is summarized to fit the window, with a divider and the contex
   }
 });
 
+const NEWS = `<!doctype html><html><head><title>Hearth 1.0</title></head><body>
+<nav>Home · Blog</nav><article><h1>Hearth 1.0</h1>
+<p>Hearth 1.0 ships on 14 November with web search, terminals and MCP servers. It runs local
+models with llama.cpp and keeps everything on your PC.</p>
+<p>The release also brings a context meter and summaries of long conversations, so a chat can go
+on for as long as you like.</p></article></body></html>`;
+
+test('web search: set up in Settings, then a reply searches, reads and cites its sources', async () => {
+  const page = `${mock.url}/pages/news`;
+  await mock.setScript({
+    search: [{ title: 'Hearth 1.0 is out', url: page, content: 'The local AI app ships soon.' }],
+    pages: { news: NEWS },
+    steps: [
+      {
+        expect: [{ has_tool: 'web_search' }],
+        reply: { tool_calls: [{ name: 'web_search', arguments: { query: 'hearth 1.0 release' } }] },
+      },
+      {
+        expect: [{ last_tool_result_contains: 'Hearth 1.0 is out' }],
+        reply: { tool_calls: [{ name: 'web_fetch', arguments: { url: page } }] },
+      },
+      {
+        expect: [{ last_tool_result_contains: 'ships on 14 November' }],
+        reply: { content: `Hearth 1.0 ships on **14 November** ([the announcement](${page})).` },
+      },
+    ],
+  });
+  const { page: ui } = app;
+
+  // Settings → Web: a SearXNG server (the mock), local pages allowed, and a test search.
+  await ui.getByRole('button', { name: 'Settings', exact: true }).click();
+  await ui.getByLabel('Search with').selectOption('searxng');
+  const address = ui.getByLabel('SearXNG address');
+  await address.fill(mock.url);
+  await address.blur();
+  await ui.getByLabel('Read pages on this PC and your network').check();
+  await ui.getByRole('button', { name: 'Test search' }).click();
+  await expect(ui.getByText('It works: 1 result.')).toBeVisible();
+
+  await ui.getByRole('radio', { name: 'Chat' }).click();
+  const web = ui.getByRole('button', { name: 'Search the web' });
+  await web.click();
+  await expect(web).toHaveAttribute('aria-pressed', 'true');
+  await send(ui, 'When does Hearth 1.0 ship?');
+  await expect(lastReply(ui)).toContainText('ships on 14 November');
+
+  const searched = ui.locator('[data-web="search"]');
+  await expect(searched).toContainText('Searched “hearth 1.0 release”');
+  await expect(searched).toContainText('1 result');
+  await expect(ui.locator('[data-web="read"]')).toContainText('Read Hearth 1.0');
+  const sources = ui.getByRole('list', { name: 'Sources' });
+  await expect(sources).toContainText('Hearth 1.0');
+  await searched.getByRole('button').first().click();
+  await expect(searched).toContainText('The local AI app ships soon.');
+
+  const dir = join('test-results', 'screens');
+  mkdirSync(dir, { recursive: true });
+  for (const theme of ['light', 'dark'] as const) {
+    await ui.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme);
+    await ui.waitForTimeout(150);
+    await ui.screenshot({ path: join(dir, `m8-web-chat-${theme}.png`) });
+  }
+  await ui.getByRole('button', { name: 'Settings', exact: true }).click();
+  await ui.getByRole('heading', { name: 'Settings' }).waitFor();
+  await ui.getByText('Read pages on this PC and your network').scrollIntoViewIfNeeded();
+  await ui.waitForTimeout(150);
+  await ui.screenshot({ path: join(dir, 'm8-web-settings-dark.png') });
+});
+
 test('screenshots of a conversation in light and dark, for visual review', async () => {
   await mock.setScript({
     steps: [

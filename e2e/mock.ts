@@ -11,7 +11,14 @@ export const MOCK_EXE = 'target/debug/hearth-mock-llm.exe';
 export type MockLlm = {
   url: string;
   /** Replaces the script: each chat request consumes the next step. */
-  setScript(script: { steps: object[]; model?: string; n_ctx?: number }): Promise<void>;
+  setScript(script: {
+    steps: object[];
+    model?: string;
+    n_ctx?: number;
+    /** SearXNG-style results for `GET /search`, and pages served at `/pages/<name>`. */
+    search?: object[];
+    pages?: Record<string, string>;
+  }): Promise<void>;
   /** Lets replies held at `hold` finish. */
   release(hold: string): Promise<void>;
   requests(): Promise<Array<{ messages: Array<{ role: string; content: unknown }> }>>;

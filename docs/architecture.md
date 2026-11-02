@@ -112,6 +112,27 @@ PowerShell) in Windows pseudo consoles (ConPTY).
 frozen`Object.prototype`forbids, so`vite.config.ts` rewrites that one line as a property
   definition.
 
+## The web (`hearth-core/src/web/`)
+
+Chats with web search on and the agent's `web_search` and `web_fetch` tools share one service.
+
+- **Searching** (`search.rs`): DuckDuckGo's HTML page by default (no key; ads and redirect links
+  are left out, and its "are you a person" page is explained), or Brave Search, Tavily or a
+  SearXNG server. Every provider gives the same hits: title, address, snippet. API keys are kept
+  in the database's `kv` table; the UI only learns whether one is set.
+- **Reading** (`fetch.rs`): the page's main text by Readability (dom_smoothie), as Markdown, cut
+  to 16,000 characters by default. Only http(s) pages; PDFs and files are refused with a reason.
+  Unless Settings → Web allows it, addresses on this PC or the local network are refused: each
+  hop of a redirect is looked up and checked, and the connection goes to the checked address.
+- **In chats**, the composer's Web button turns web search on for the chat (its `search_mode`).
+  A reply then gets the two web tools and may search and read for up to five steps before it has
+  to answer; the steps and their answers are saved in the message tree like the agent's. The
+  transcript shows each search and page as a line (searches open to their results) and the
+  pages used as source chips under the answer.
+- **In coding sessions** the two tools are in the Network class: they ask first in Ask and
+  Auto-edit mode, and run freely in Full auto.
+- Results and pages are information, not instructions, and both prompts say so.
+
 ## Context management (`hearth-core/src/context.rs`)
 
 Chats and coding tasks keep their requests inside the model's context window.

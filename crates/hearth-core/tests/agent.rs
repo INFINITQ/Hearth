@@ -77,9 +77,13 @@ async fn harness(script: Script, mode: Option<&str>) -> Harness {
         settings_dir.path().join("settings.json"),
     ));
     settings
-        .update(&json!({ "models": { "code": {
-            "kind": "connection", "connectionId": connection.id, "model": "mock-model"
-        } } }))
+        .update(&json!({
+            "models": { "code": {
+                "kind": "connection", "connectionId": connection.id, "model": "mock-model"
+            } },
+            // The mock server searches like SearXNG and serves pages on 127.0.0.1.
+            "web": { "provider": "searxng", "searxngUrl": server.url, "allowLocal": true }
+        }))
         .unwrap();
     let root: PathBuf = dunce::canonicalize(project.path()).unwrap();
     let saved = store.open_project(&root.display().to_string()).unwrap();
@@ -813,4 +817,93 @@ async fn a_request_too_long_for_the_model_is_summarized_and_tried_again() {
     );
     let path = h.store.active_path(&h.session_id).unwrap();
     assert_eq!(path.last().unwrap().content, "Fits now.");
+}
+
+const GUIDE: &str = "<!doctype html><html><head><title>Fixtures guide</title></head><body>\
+<nav>Home</nav><article><h1>Fixtures</h1>\
+<p>Fixtures give tests what they need. Write yield fixtures when a test needs cleaning up after \
+it: the code after yield runs once the test is done, even when it fails.</p>\
+<p>Fixtures can use other fixtures, and their scope decides how often they run: once per test, \
+per module or per session.</p></article></body></html>";
+
+#[tokio::test]
+async fn web_tools_ask_first_then_search_and_read() {
+    let h = harness(Script::new(), Some("ask")).await;
+    let page = format!("{}/pages/guide", h.server.url);
+    let mut script = Script::new()
+        .expect_then(
+            vec![
+                Expect::HasTool("web_search".into()),
+                Expect::HasTool("web_fetch".into()),
+            ],
+            Reply::tool_call("web_search", json!({ "query": "pytest yield fixtures" })),
+        )
+        .expect_then(
+            vec![Expect::LastToolResultContains("[1] Fixtures guide".into())],
+            Reply::tool_call("web_fetch", json!({ "url": page })),
+        )
+        .expect_then(
+            vec![Expect::LastToolResultContains(
+                "Write yield fixtures".into(),
+            )],
+            Reply::text("Use a yield fixture."),
+        );
+    script.search =
+        vec![json!({ "title": "Fixtures guide", "url": page, "content": "How fixtures work." })];
+    script.pages.insert("guide".into(), GUIDE.into());
+    h.server.set_script(script);
+
+    let (sink, _) = h.start("How do I clean up after a pytest test?");
+    // Both web tools ask in Ask mode (they reach the internet).
+    let mut asked = Vec::new();
+    while asked.len() < 2 {
+        let request = wait_for(&sink, "permission request", |e| match e {
+            RunEvent::PermissionRequest { request_id, .. } => !asked.contains(request_id),
+            _ => false,
+        })
+        .await;
+        let RunEvent::PermissionRequest {
+            request_id, tool, ..
+        } = request
+        else {
+            unreachable!()
+        };
+        assert!(tool.starts_with("web_"), "{tool}");
+        h.agent.resolve_permission(
+            &request_id,
+            PermissionReply {
+                decision: Decision::AllowOnce,
+                note: None,
+            },
+        );
+        asked.push(request_id);
+    }
+    assert_eq!(
+        finished(&sink).await,
+        RunEnd::Completed,
+        "{:#?}",
+        sink.events()
+    );
+    let path = h.store.active_path(&h.session_id).unwrap();
+    let search = path
+        .iter()
+        .find(|m| m.tool_name.as_deref() == Some("web_search"))
+        .unwrap();
+    let display = search.tool_display.as_ref().unwrap();
+    assert_eq!(display["results"][0]["url"], json!(page));
+    assert_eq!(display["summary"], json!("1 result"));
+    let read = path
+        .iter()
+        .find(|m| m.tool_name.as_deref() == Some("web_fetch"))
+        .unwrap();
+    assert_eq!(
+        read.tool_display.as_ref().unwrap()["pageTitle"],
+        json!("Fixtures guide")
+    );
+    assert!(
+        !read.content.contains("Home"),
+        "the page's menu is left out: {}",
+        read.content
+    );
+    assert_eq!(path.last().unwrap().content, "Use a yield fixture.");
 }

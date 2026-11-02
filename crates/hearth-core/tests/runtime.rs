@@ -159,7 +159,10 @@ async fn models_load_swap_fail_and_chat() {
     let sink = Arc::new(CollectSink::default());
     chat.start(
         &session.id,
-        ChatAction::Send { text: "Hi".into() },
+        ChatAction::Send {
+            text: "Hi".into(),
+            web: None,
+        },
         sink.clone(),
     )
     .unwrap();

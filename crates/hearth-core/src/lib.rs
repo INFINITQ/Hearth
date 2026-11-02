@@ -15,6 +15,7 @@ pub mod runtime;
 pub mod settings;
 pub mod store;
 pub mod terminal;
+pub mod web;
 
 /// Version of the core, for diagnostics.
 pub fn version() -> &'static str {

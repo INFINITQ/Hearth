@@ -63,6 +63,30 @@ fn connection_in(db: &Db, id: &str) -> Result<Connection> {
 }
 
 impl Store {
+    /// A saved value (the web search providers' API keys live here).
+    pub fn kv_get(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn()
+            .query_row("SELECT value FROM kv WHERE key = ?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()?)
+    }
+
+    /// Saves a value; `None` (or an empty one) removes it.
+    pub fn kv_set(&self, key: &str, value: Option<&str>) -> Result<()> {
+        let db = self.conn();
+        match value.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(value) => db.execute(
+                "INSERT INTO kv (key, value, updated_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                params![key, value, now_ms()],
+            )?,
+            None => db.execute("DELETE FROM kv WHERE key = ?1", [key])?,
+        };
+        Ok(())
+    }
+
     pub fn connections(&self) -> Result<Vec<Connection>> {
         let db = self.conn();
         let mut statement = db.prepare(&format!(

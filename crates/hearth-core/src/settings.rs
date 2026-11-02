@@ -118,6 +118,18 @@ pub struct CodeSettings {
     pub shell: crate::agent::shell::ShellKind,
 }
 
+/// Web search and page reading (chats with web search on, and the agent's web tools). API keys
+/// aren't here: they're kept in the database.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WebSettings {
+    pub provider: crate::web::SearchProvider,
+    /// A SearXNG server, e.g. `http://localhost:8888`.
+    pub searxng_url: Option<String>,
+    /// Pages on this PC and the local network may be read too.
+    pub allow_local: bool,
+}
+
 /// Everything the user can change. New fields need `#[serde(default)]` semantics (the struct
 /// is `default`), so settings files from older versions keep loading.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -129,6 +141,7 @@ pub struct Settings {
     pub chat: ChatSettings,
     pub code: CodeSettings,
     pub runtime: RuntimeSettings,
+    pub web: WebSettings,
 }
 
 #[derive(Debug, thiserror::Error)]

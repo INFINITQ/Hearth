@@ -323,7 +323,8 @@ full_blob, model_label, finish_reason, status streaming|complete|interrupted|err
     directly (`terminal/pty.rs`) rather than portable-pty, so a shell can start suspended and
     join its Job Object before it runs.
   - MCP: rmcp `=3.8.0`, behind one module, with stderr piped.
-  - Web: dom_smoothie, htmd, dom_query; image (png, jpeg, webp, gif).
+  - Web: dom_smoothie `=0.18.2` (Readability, with its own Markdown output) and dom_query
+    `=0.28.0` (the same one it uses); image (png, jpeg, webp, gif).
   - System: nvml-wrapper, sysinfo; tracing.
   - Rust→TS types: ts-rs.
   - Tests: axum, insta, tempfile, pretty_assertions.

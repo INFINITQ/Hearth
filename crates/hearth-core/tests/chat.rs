@@ -89,7 +89,10 @@ fn streamed(events: &[RunEvent]) -> (String, String) {
 }
 
 fn send(text: &str) -> ChatAction {
-    ChatAction::Send { text: text.into() }
+    ChatAction::Send {
+        text: text.into(),
+        web: None,
+    }
 }
 
 #[tokio::test]
@@ -348,7 +351,14 @@ async fn long_chats_are_summarized_to_fit_the_window() {
     let long: String = (0..1500).map(|n| format!("{n} ")).collect();
     let sink = Arc::new(CollectSink::default());
     h.chat
-        .start(&session.id, ChatAction::Send { text: long }, sink.clone())
+        .start(
+            &session.id,
+            ChatAction::Send {
+                text: long,
+                web: None,
+            },
+            sink.clone(),
+        )
         .unwrap();
     assert_eq!(wait_finished(&sink).await, RunEnd::Completed);
 
@@ -358,6 +368,7 @@ async fn long_chats_are_summarized_to_fit_the_window() {
             &session.id,
             ChatAction::Send {
                 text: "What did I send?".into(),
+                web: None,
             },
             sink.clone(),
         )
@@ -378,4 +389,123 @@ async fn long_chats_are_summarized_to_fit_the_window() {
             .iter()
             .any(|e| matches!(e, RunEvent::Context { limit: 2000, .. }))
     );
+}
+
+const NEWS: &str = "<!doctype html><html><head><title>Hearth 1.0</title></head><body>\
+<article><h1>Hearth 1.0</h1><p>Hearth 1.0 ships on 14 November with web search, terminals and \
+MCP servers. It runs local models with llama.cpp and keeps everything on your PC.</p>\
+<p>The release also brings a context meter and summaries of long conversations, so chats can \
+go on for as long as you like.</p></article></body></html>";
+
+fn web_settings(h: &Harness, allow_local: bool) {
+    h.settings
+        .update(&json!({ "web": {
+            "provider": "searxng", "searxngUrl": h.server.url, "allowLocal": allow_local
+        } }))
+        .unwrap();
+}
+
+#[tokio::test]
+async fn web_search_in_a_chat_searches_reads_and_then_answers() {
+    let h = harness(Script::new()).await;
+    let page = format!("{}/pages/news", h.server.url);
+    let mut script = Script::new()
+        .expect_then(
+            vec![
+                Expect::HasTool("web_search".into()),
+                Expect::NoTool("read_file".into()),
+                Expect::SystemContains("Cite the pages you used".into()),
+            ],
+            Reply::tool_call("web_search", json!({ "query": "hearth 1.0 release" })),
+        )
+        .expect_then(
+            vec![Expect::LastToolResultContains("Hearth 1.0 is out".into())],
+            Reply::tool_call("web_fetch", json!({ "url": page })),
+        )
+        .expect_then(
+            vec![Expect::LastToolResultContains(
+                "ships on 14 November".into(),
+            )],
+            Reply::text("Hearth 1.0 ships on 14 November."),
+        );
+    script.search = vec![json!({ "title": "Hearth 1.0 is out", "url": page, "content": "News." })];
+    script.pages.insert("news".into(), NEWS.into());
+    h.server.set_script(script);
+    web_settings(&h, true);
+
+    let session = h.store.create_session(Mode::Chat, None).unwrap();
+    let sink = Arc::new(CollectSink::default());
+    h.chat
+        .start(
+            &session.id,
+            ChatAction::Send {
+                text: "When does Hearth 1.0 ship?".into(),
+                web: Some(true),
+            },
+            sink.clone(),
+        )
+        .unwrap();
+    assert_eq!(
+        wait_finished(&sink).await,
+        RunEnd::Completed,
+        "{:#?}",
+        sink.events()
+    );
+
+    use MessageRole::{Assistant, Tool, User};
+    let path = h.store.active_path(&session.id).unwrap();
+    let roles: Vec<MessageRole> = path.iter().map(|m| m.role).collect();
+    assert_eq!(roles, [User, Assistant, Tool, Assistant, Tool, Assistant]);
+    assert_eq!(
+        path[2].tool_display.as_ref().unwrap()["results"][0]["url"],
+        json!(page)
+    );
+    assert_eq!(
+        path[4].tool_display.as_ref().unwrap()["pageTitle"],
+        json!("Hearth 1.0")
+    );
+    assert_eq!(path[5].content, "Hearth 1.0 ships on 14 November.");
+    assert!(sink.events().iter().any(|e| matches!(
+        e,
+        RunEvent::ToolStarted { title, .. } if title == "Search the web for “hearth 1.0 release”"
+    )));
+    // Web search stays on for this chat.
+    let saved = h.store.session(&session.id).unwrap();
+    assert_eq!(saved.search_mode.as_deref(), Some("web"));
+}
+
+#[tokio::test]
+async fn chats_dont_read_pages_on_this_pc_unless_allowed() {
+    let h = harness(Script::new()).await;
+    let page = format!("{}/pages/news", h.server.url);
+    let mut script = Script::new()
+        .reply(Reply::tool_call("web_fetch", json!({ "url": page })))
+        .expect_then(
+            vec![Expect::LastToolResultContains("local network".into())],
+            Reply::text("I couldn't read that page."),
+        );
+    script.pages.insert("news".into(), NEWS.into());
+    h.server.set_script(script);
+    web_settings(&h, false);
+    let session = h.store.create_session(Mode::Chat, None).unwrap();
+    let sink = Arc::new(CollectSink::default());
+    h.chat
+        .start(
+            &session.id,
+            ChatAction::Send {
+                text: "Read my router's page".into(),
+                web: Some(true),
+            },
+            sink.clone(),
+        )
+        .unwrap();
+    assert_eq!(
+        wait_finished(&sink).await,
+        RunEnd::Completed,
+        "{:#?}",
+        sink.events()
+    );
+    let path = h.store.active_path(&session.id).unwrap();
+    assert_eq!(path[2].tool_status.as_deref(), Some("error"));
+    assert_eq!(path.last().unwrap().content, "I couldn't read that page.");
 }

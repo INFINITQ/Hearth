@@ -125,9 +125,27 @@ commands with their live output. A Vite plugin fixes xterm.js under `freezeProto
     - Vitest: 24.
     - Playwright E2E: 33 (a real Git Bash in the panel).
 
-## Next: M8, web search and fetch
+- **M8**: web search and reading pages.
+  - **Backend** (`hearth-core/src/web/`): DuckDuckGo (HTML, no key), Brave, Tavily and SearXNG,
+    all giving the same hits; pages read with Readability as Markdown; local and private
+    addresses refused unless allowed (checked on every redirect, connections pinned to the
+    checked address); keys in the `kv` table. Checked once by hand against the real DuckDuckGo
+    and rust-lang.org (`live_web`, an ignored test).
+  - **Chat:** the Web button turns web search on for a chat; replies search and read for up to
+    five steps, saved in the tree; the last step has to answer (`tool_choice: none`, same tools,
+    so the server reuses its prompt cache).
+  - **Agent:** `web_search` and `web_fetch` (Network class: ask first except in Full auto), with
+    the usual aliases (`browser.search`, `fetch_url`…).
+  - **UI:** search and read lines (searches open to their results), source chips under the
+    answer, Settings → Web (provider, key, SearXNG address, local pages, a test search).
+  - **Tests (all green):**
+    - Rust: 126 core unit, 18 agent, 11 chat, 11 client, 1 runtime, 4 app.
+    - Vitest: 25.
+    - Playwright E2E: 34 (Settings → Web, then a reply that searches, reads and cites).
 
-- Search providers: DuckDuckGo (default, no key), Brave, Tavily, SearXNG; page fetch to
-  readable Markdown.
-- Chat: a web toggle and source chips from the actual results.
-- Agent: `web_search` and `web_fetch` tools in the Network permission class.
+## Next: M9, MCP servers
+
+- An MCP client (rmcp): stdio and streamable HTTP servers, each process in its own Job Object.
+- Settings → MCP: add a server, import Claude-Desktop-style JSON, status and tool list.
+- The agent gets the servers' tools as `mcp__<server>__<tool>` in the External class (asks
+  first, with "always allow" per tool).

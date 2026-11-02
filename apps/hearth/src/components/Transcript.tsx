@@ -1,15 +1,19 @@
 import { ArrowDown, TriangleAlert, X } from 'lucide-react';
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { answersByStep, webTurns } from '../lib/toolCalls';
 import { useApp } from '../stores/app';
 import { useChat } from '../stores/chat';
 import type { LiveRun } from '../lib/runReducer';
 import { MessageView, ModelLoadingLine, ProgressLine, TypingDots } from './MessageView';
 import { Button, IconButton } from './ui/Button';
+import { WebSteps } from './WebActivity';
 
 /** The conversation: follows new text unless you scroll up to read. */
 export function Transcript() {
   const messages = useChat((s) => s.messages);
   const run = useChat((s) => s.run);
+  const steps = useMemo(() => answersByStep(messages), [messages]);
+  const turns = useMemo(() => webTurns(messages), [messages]);
   const box = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [away, setAway] = useState(false);
@@ -37,14 +41,30 @@ export function Transcript() {
         aria-label="Conversation"
       >
         <div className="mx-auto max-w-[760px] space-y-7 px-6 pb-10 pt-8">
-          {messages.map((message, index) => (
-            <MessageView
-              key={message.id}
-              message={message}
-              live={run?.messageId === message.id}
-              last={index === messages.length - 1}
-            />
-          ))}
+          {messages.map((message, index) => {
+            // Web search: tool answers show in their step's lines, not on their own.
+            if (message.role === 'tool') return null;
+            if (message.role === 'assistant' && message.toolCalls?.length) {
+              const before = messages.slice(0, index).findLast((m) => m.role !== 'tool');
+              return (
+                <WebSteps
+                  key={message.id}
+                  message={message}
+                  answers={steps.get(message.id)}
+                  follows={!!before?.toolCalls?.length}
+                />
+              );
+            }
+            return (
+              <MessageView
+                key={message.id}
+                message={message}
+                live={run?.messageId === message.id}
+                last={index === messages.length - 1}
+                turn={turns.get(message.id)}
+              />
+            );
+          })}
           {run && <BeforeReply run={run} />}
           <RunErrorBanner />
         </div>

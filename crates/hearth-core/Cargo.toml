@@ -28,6 +28,8 @@ encoding_rs = { workspace = true }
 chardetng = { workspace = true }
 dunce = { workspace = true }
 serde_path_to_error = { workspace = true }
+dom_query = { workspace = true }
+dom_smoothie = { workspace = true }
 # Job Objects (child process trees), the Git for Windows registry entry, OEM code pages.
 windows = { workspace = true, features = [
   "Win32_Foundation",

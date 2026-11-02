@@ -10,27 +10,32 @@ import {
 } from 'lucide-react';
 import { useLayoutEffect, useRef, useState } from 'react';
 import { cn } from '../lib/cn';
+import type { WebTurn } from '../lib/toolCalls';
 import type { Message } from '../lib/types';
 import { useChat } from '../stores/chat';
 import { SummaryDivider } from './ContextMeter';
 import { Markdown } from './Markdown';
 import { ThinkingBlock } from './ThinkingBlock';
 import { Button, IconButton } from './ui/Button';
+import { Sources } from './WebActivity';
 
 export function MessageView({
   message,
   live,
   last,
+  turn,
 }: {
   message: Message;
   live: boolean;
   last: boolean;
+  /** The answer of a reply that searched the web first. */
+  turn?: WebTurn;
 }) {
   if (message.role === 'summary') return <SummaryDivider message={message} />;
   return message.role === 'user' ? (
     <UserMessage message={message} />
   ) : (
-    <AssistantMessage message={message} live={live} last={last} />
+    <AssistantMessage message={message} live={live} last={last} turn={turn} />
   );
 }
 
@@ -160,11 +165,15 @@ function AssistantMessage({
   message,
   live,
   last,
+  turn,
 }: {
   message: Message;
   live: boolean;
   last: boolean;
+  turn?: WebTurn;
 }) {
+  // A reply that searched first: versions and regenerating cover the whole reply.
+  const first = turn?.start ?? message;
   const busy = useChat((s) => s.run !== null);
   const loadingModel = useChat((s) => (live ? s.run?.loading : null));
   const streaming = live && message.status === 'streaming';
@@ -195,6 +204,7 @@ function AssistantMessage({
       {message.status === 'interrupted' && (
         <p className="mt-2 text-[12.5px] text-text-3">Stopped</p>
       )}
+      {turn && turn.sources.length > 0 && !streaming && <Sources sources={turn.sources} />}
       {!streaming && (
         <div
           className={cn(
@@ -202,12 +212,12 @@ function AssistantMessage({
             last ? 'opacity-100' : 'opacity-0 focus-within:opacity-100 group-hover:opacity-100',
           )}
         >
-          <Versions message={message} />
+          <Versions message={first} />
           {message.content && <CopyButton text={message.content} />}
           <IconButton
             label={message.status === 'error' ? 'Try again' : 'Regenerate'}
             disabled={busy}
-            onClick={() => void useChat.getState().regenerate(message.id)}
+            onClick={() => void useChat.getState().regenerate(first.id)}
           >
             <RotateCcw />
           </IconButton>

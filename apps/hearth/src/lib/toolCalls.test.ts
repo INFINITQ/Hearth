@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { agentCommands, answersByStep, callTitle, canonicalTool, latestTodos } from './toolCalls';
+import {
+  agentCommands,
+  answersByStep,
+  callTitle,
+  canonicalTool,
+  latestTodos,
+  webSources,
+  webTurns,
+} from './toolCalls';
 import type { Message, ToolCall } from './types';
 
 const call = (name: string, args: unknown): ToolCall => ({
@@ -101,5 +109,58 @@ describe('tool calls', () => {
       },
     ]);
     expect(canonicalTool('kill_shell')).toBe('kill_process');
+  });
+
+  it('groups a chat reply that searched, with the pages it read first among its sources', () => {
+    const user = { ...tool('u1', ''), role: 'user' as const, toolCallId: null };
+    const step = (id: string, calls: ToolCall[]): Message => ({
+      ...tool(id, ''),
+      role: 'assistant',
+      toolCallId: null,
+      toolCalls: calls,
+    });
+    const searched = {
+      ...tool('t1', 'c1', {
+        title: 'Search',
+        results: [
+          { title: 'A', url: 'https://a.example/', snippet: '' },
+          { title: 'B', url: 'https://b.example/', snippet: '' },
+        ],
+      }),
+      toolName: 'web_search',
+      toolStatus: 'ok' as const,
+    };
+    const read = {
+      ...tool('t2', 'c2', { title: 'Read', url: 'https://b.example', pageTitle: 'Page B' }),
+      toolName: 'web_fetch',
+      toolStatus: 'ok' as const,
+    };
+    const failed = {
+      ...tool('t3', 'c3', { title: 'Read', url: 'https://c.example/' }),
+      toolName: 'web_fetch',
+      toolStatus: 'error' as const,
+    };
+    const answer = step('a3', []);
+    const turns = webTurns([
+      user,
+      step('a1', [{ ...call('web_search', {}), id: 'c1' }]),
+      searched,
+      step('a2', [
+        { ...call('web_fetch', {}), id: 'c2' },
+        { ...call('web_fetch', {}), id: 'c3' },
+      ]),
+      read,
+      failed,
+      answer,
+    ]);
+    expect([...turns.keys()]).toEqual(['a3']);
+    expect(turns.get('a3')?.start.id).toBe('a1');
+    expect(turns.get('a3')?.sources).toEqual([
+      { url: 'https://b.example', title: 'Page B', read: true },
+      { url: 'https://a.example/', title: 'A', read: false },
+    ]);
+    // A plain reply isn't a web turn.
+    expect(webTurns([user, step('a9', [])]).size).toBe(0);
+    expect(webSources([])).toEqual([]);
   });
 });

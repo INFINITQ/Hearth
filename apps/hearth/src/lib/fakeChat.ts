@@ -124,6 +124,7 @@ export function fakeChat(): ChatBackend {
       listener: ((e: TerminalEvent) => void) | null;
     }
   >();
+  const webKeys = { brave: false, tavily: false };
   let counter = 0;
   const newId = () => `fake-${Date.now().toString(36)}-${(counter++).toString(36)}`;
   const changed = () => sessionListeners.forEach((listener) => listener());
@@ -507,6 +508,19 @@ export function fakeChat(): ChatBackend {
       terminals.delete(id);
     },
     terminalsList: async () => [...terminals.values()].map((t) => t.info),
+
+    webKeys: async () => ({ ...webKeys }),
+    webKeySet: async (provider, key) => {
+      webKeys[provider] = key.trim().length > 0;
+      return { ...webKeys };
+    },
+    webTest: async () => [
+      {
+        title: 'Open-source language models',
+        url: 'https://example.com/models',
+        snippet: 'A list of open models you can run yourself.',
+      },
+    ],
 
     runtimeOverview: async () => ({
       server: {

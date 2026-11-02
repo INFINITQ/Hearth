@@ -52,6 +52,8 @@ type ChatState = {
   /** Code mode: the Changes panel and what it lists (null until loaded). */
   changesOpen: boolean;
   changes: FileChange[] | null;
+  /** Chats: replies may search the web (the composer's Web button). */
+  web: boolean;
 
   loadLists(): Promise<void>;
   loadProjects(): Promise<void>;
@@ -80,6 +82,7 @@ type ChatState = {
   loadChanges(): Promise<void>;
   revertFile(change: FileChange): Promise<void>;
   search(query: string, mode: Mode): Promise<void>;
+  setWeb(on: boolean): void;
   setRunState(info: RunInfo): void;
   dismissError(): void;
   dismissNotice(): void;
@@ -186,6 +189,7 @@ export const useChat = create<ChatState>()((set, get) => ({
   pendingTrust: null,
   changesOpen: false,
   changes: null,
+  web: false,
 
   loadLists: async () => {
     const project = get().project;
@@ -247,6 +251,8 @@ export const useChat = create<ChatState>()((set, get) => ({
       error: null,
       notice: null,
       changes: null,
+      // A chat keeps web search as it was last sent.
+      ...(view.session.mode === 'chat' ? { web: view.session.searchMode === 'web' } : {}),
     });
     if (get().changesOpen) void get().loadChanges();
     const project = get().project;
@@ -308,8 +314,13 @@ export const useChat = create<ChatState>()((set, get) => ({
     }
     const leaf = get().messages.at(-1)?.id ?? null;
     set({ messages: [...get().messages, pendingUser(session.id, text.trim(), leaf)] });
-    await startRun(session.id, { kind: 'send', text });
+    await startRun(
+      session.id,
+      mode === 'chat' ? { kind: 'send', text, web: get().web } : { kind: 'send', text },
+    );
   },
+
+  setWeb: (on) => set({ web: on }),
 
   stop: () => {
     const run = get().run;

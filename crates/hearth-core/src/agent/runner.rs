@@ -113,6 +113,7 @@ struct Inner {
     /// Messages sent while a run works, by run id.
     steers: Mutex<HashMap<String, Vec<String>>>,
     shells: Mutex<HashMap<ShellKind, Option<Shell>>>,
+    web: crate::web::Web,
 }
 
 #[derive(Clone)]
@@ -190,13 +191,13 @@ impl Repeats {
 }
 
 /// A 9-character id for a tool call (some chat templates insist on that length).
-fn call_id() -> String {
+pub(crate) fn call_id() -> String {
     new_id().replace('-', "").chars().rev().take(9).collect()
 }
 
 /// Tool calls written as text (the server didn't parse them): taken out of the content, or
 /// found in the reasoning.
-fn calls_in_text(content: &str, reasoning: &str) -> Option<(String, Vec<ToolCall>)> {
+pub(crate) fn calls_in_text(content: &str, reasoning: &str) -> Option<(String, Vec<ToolCall>)> {
     let known = |name: &str| tools::canonical_name(name).is_some();
     let to_calls = |found: Vec<toolparse::TextToolCall>| -> Vec<ToolCall> {
         found
@@ -224,7 +225,7 @@ fn latest_todos(history: &[Message]) -> Vec<Todo> {
 
 /// Every assistant tool call followed by its answer, and no answers without a call: chat
 /// templates break otherwise. Calls with no saved answer (Hearth stopped mid-run) get one.
-fn pair_tool_results(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+pub(crate) fn pair_tool_results(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
     let mut out: Vec<ChatMessage> = Vec::with_capacity(messages.len());
     let mut open: Vec<String> = Vec::new();
     let close = |out: &mut Vec<ChatMessage>, open: &mut Vec<String>| {
@@ -383,6 +384,7 @@ impl Agent {
         settings: Arc<SettingsStore>,
     ) -> Self {
         Self(Arc::new(Inner {
+            web: crate::web::Web::new(store.clone(), settings.clone()),
             store,
             runs,
             resolver,
@@ -1096,6 +1098,9 @@ impl Agent {
                     summary: "No such process".into(),
                 },
             },
+            action @ (Action::WebSearch { .. } | Action::WebFetch { .. }) => {
+                tools::run_web(&self.0.web, &action, &run.cancel, &mut display).await
+            }
             Action::Kill { process_id } => match memory.processes.get(process_id) {
                 Some(process) => {
                     process.kill();

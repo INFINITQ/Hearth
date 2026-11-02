@@ -16,6 +16,7 @@ mod links;
 mod runtime_commands;
 mod terminal_commands;
 mod theme;
+mod web_commands;
 mod webview2;
 mod window;
 
@@ -29,6 +30,7 @@ use hearth_core::runtime::Runtime;
 use hearth_core::settings::SettingsStore;
 use hearth_core::store::{ConnectionInput, Store, StoreError};
 use hearth_core::terminal::Terminals;
+use hearth_core::web::Web;
 use tauri::{Emitter, Manager};
 
 pub use error::{Error, Result};
@@ -103,6 +105,9 @@ fn main() {
             terminal_commands::terminal_resize,
             terminal_commands::terminal_close,
             terminal_commands::terminals_list,
+            web_commands::web_keys,
+            web_commands::web_key_set,
+            web_commands::web_test,
         ])
         .setup(|app| {
             let data = data_dir(app.handle())?;
@@ -136,6 +141,7 @@ fn main() {
                 settings.clone(),
             );
             let agent = Agent::new(store.clone(), runs.clone(), resolver, settings.clone());
+            let web = Arc::new(Web::new(store.clone(), settings.clone()));
 
             app.manage(settings);
             app.manage(store);
@@ -143,6 +149,7 @@ fn main() {
             app.manage(chat);
             app.manage(agent);
             app.manage(Arc::new(Terminals::new()));
+            app.manage(web);
             app.manage(DataDir(data.clone()));
             window::create_main(app.handle(), &data)?;
             Ok(())

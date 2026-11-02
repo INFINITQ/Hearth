@@ -10,6 +10,8 @@ export type ModelRef =
 
 export type ShellKind = 'git_bash' | 'powershell';
 
+export type SearchProvider = 'duckduckgo' | 'brave' | 'tavily' | 'searxng';
+
 /** How Hearth runs one model file (unset: Hearth's defaults). */
 export type ModelPreset = {
   context?: number | null;
@@ -33,6 +35,8 @@ export type Settings = {
     maxLoaded: number;
     presets: Record<string, ModelPreset>;
   };
+  /** Web search (chats with web search on, and the agent's web tools). Keys are kept apart. */
+  web: { provider: SearchProvider; searxngUrl: string | null; allowLocal: boolean };
 };
 
 /** A GGUF model found in the model folders. */
@@ -111,6 +115,7 @@ export const DEFAULT_SETTINGS: Settings = {
   chat: { systemPrompt: null },
   code: { shell: 'git_bash' },
   runtime: { llamaServerPath: null, modelFolders: [], maxLoaded: 1, presets: {} },
+  web: { provider: 'duckduckgo', searxngUrl: null, allowLocal: false },
 };
 
 export type ChatParams = {
@@ -197,7 +202,15 @@ export type ToolDisplay = {
   exitCode?: number | null;
   durationMs?: number;
   processId?: number;
+  /** Web tools: the search and its results, or the page read. */
+  query?: string;
+  results?: WebHit[];
+  url?: string;
+  pageTitle?: string;
 };
+
+/** A web search result. */
+export type WebHit = { title: string; url: string; snippet: string };
 
 export type ToolStatus = 'ok' | 'error' | 'denied' | 'cancelled';
 
@@ -356,7 +369,7 @@ export type RunEvent =
 export type RunEnvelope = RunEvent & { runId: string; seq: number };
 
 export type ChatAction =
-  | { kind: 'send'; text: string }
+  | { kind: 'send'; text: string; web?: boolean }
   | { kind: 'regenerate'; messageId: string }
   | { kind: 'edit'; messageId: string; text: string };
 

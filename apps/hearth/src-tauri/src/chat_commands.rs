@@ -332,7 +332,7 @@ pub async fn run_start(
     let started = match store.session(&args.session_id)?.mode {
         Mode::Chat => chat.start(&args.session_id, args.action, sink)?,
         Mode::Code => match args.action {
-            ChatAction::Send { text } => agent.start(&args.session_id, &text, sink)?,
+            ChatAction::Send { text, .. } => agent.start(&args.session_id, &text, sink)?,
             _ => {
                 return Err(Error::Invalid(
                     "Editing or regenerating earlier messages isn't available in coding sessions yet."

@@ -28,8 +28,8 @@ In development. Milestones:
 | M5  | llama-server runtime manager and Models page                | done  |
 | M6  | Context management (compaction)                             | done  |
 | M7  | Terminal panel                                              | done  |
-| M8  | Web search and fetch                                        | next  |
-| M9  | MCP servers                                                 |       |
+| M8  | Web search and fetch                                        | done  |
+| M9  | MCP servers                                                 | next  |
 | M10 | Attachments and images                                      |       |
 | M11 | Polish, installer, docs                                     |       |
 

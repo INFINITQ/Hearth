@@ -43,6 +43,10 @@ encoding_rs = "0.8"
 chardetng = "1"
 dunce = "1"
 serde_path_to_error = "0.1"
+# The web: HTML parsing (search results) and Readability (a page's main text, as Markdown).
+# Pinned: dom_smoothie must use the same dom_query.
+dom_query = "=0.28.0"
+dom_smoothie = "=0.18.2"
 axum = "0.8"
 pretty_assertions = "1"
 

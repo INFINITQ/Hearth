@@ -151,6 +151,56 @@ export function agentCommands(messages: Message[]): AgentCommand[] {
   return commands;
 }
 
+/** A page a chat reply drew on. `read`: the model read it, not just its search snippet. */
+export type WebSource = { url: string; title: string; read: boolean };
+
+/** The pages a web search reply used: the ones it read first, then search results, each once. */
+export function webSources(answers: Message[]): WebSource[] {
+  const sources: WebSource[] = [];
+  const seen = new Set<string>();
+  const add = (url: string | undefined, title: string | undefined, read: boolean) => {
+    if (!url) return;
+    const key = url.replace(/\/$/, '');
+    if (seen.has(key)) return;
+    seen.add(key);
+    sources.push({ url, title: title || url, read });
+  };
+  const ok = answers.filter((m) => m.toolStatus === 'ok');
+  for (const m of ok) {
+    if (m.toolName === 'web_fetch') add(m.toolDisplay?.url, m.toolDisplay?.pageTitle, true);
+  }
+  for (const m of ok) {
+    if (m.toolName === 'web_search') {
+      for (const hit of m.toolDisplay?.results ?? []) add(hit.url, hit.title, false);
+    }
+  }
+  return sources;
+}
+
+/** A chat reply that searched first: its first step (for versions and regenerating) and sources. */
+export type WebTurn = { start: Message; sources: WebSource[] };
+
+/** Chat replies that searched or read before answering, by the id of the answer. */
+export function webTurns(messages: Message[]): Map<string, WebTurn> {
+  const turns = new Map<string, WebTurn>();
+  let start: Message | null = null;
+  let answers: Message[] = [];
+  for (const message of messages) {
+    if (message.role === 'user') {
+      start = null;
+      answers = [];
+    } else if (message.role === 'tool') {
+      answers.push(message);
+    } else if (message.role === 'assistant') {
+      start ??= message;
+      if (!message.toolCalls?.length && start !== message) {
+        turns.set(message.id, { start, sources: webSources(answers) });
+      }
+    }
+  }
+  return turns;
+}
+
 /** The newest to-do list in a session. */
 export function latestTodos(messages: Message[]): Todo[] {
   for (let i = messages.length - 1; i >= 0; i--) {

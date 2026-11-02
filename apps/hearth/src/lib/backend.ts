@@ -31,6 +31,7 @@ import {
   type SystemInfo,
   type TerminalEvent,
   type TerminalInfo,
+  type WebHit,
 } from './types';
 
 export type CaptionState = 'enter' | 'leave' | 'press' | 'release';
@@ -49,6 +50,8 @@ export interface WindowControls {
 }
 
 /** A JSON merge patch for the settings: `null` resets a value to its default. */
+export type WebKeys = { brave: boolean; tavily: boolean };
+
 export type SettingsPatch = { [K in keyof Settings]?: Partial<Settings[K]> | Settings[K] | null };
 
 /** Conversations, runs and connections. */
@@ -114,6 +117,13 @@ export interface ChatBackend {
   /** Ends the shell and everything started in it. */
   terminalClose(id: string): Promise<void>;
   terminalsList(): Promise<TerminalInfo[]>;
+
+  /** Settings → Web: which providers have an API key (the keys never come back). */
+  webKeys(): Promise<WebKeys>;
+  /** Saves a provider's key; an empty one removes it. */
+  webKeySet(provider: 'brave' | 'tavily', key: string): Promise<WebKeys>;
+  /** A search with the current settings, to check them. */
+  webTest(): Promise<WebHit[]>;
 
   /** The Models page: llama-server, folders, models and their state (`refresh`: probe and rescan). */
   runtimeOverview(refresh: boolean): Promise<RuntimeOverview>;
@@ -238,6 +248,9 @@ export function tauriBackend(): Backend {
     terminalResize: (id, cols, rows) => invoke('terminal_resize', { id, cols, rows }),
     terminalClose: (id) => invoke('terminal_close', { id }),
     terminalsList: () => invoke('terminals_list'),
+    webKeys: () => invoke('web_keys'),
+    webKeySet: (provider, key) => invoke('web_key_set', { provider, key }),
+    webTest: () => invoke('web_test'),
     runtimeOverview: (refresh) => invoke('runtime_overview', { refresh }),
     modelLoad: (modelId) => invoke('model_load', { modelId }),
     modelUnload: (modelId) => invoke('model_unload', { modelId }),

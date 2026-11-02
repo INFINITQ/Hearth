@@ -5,7 +5,7 @@
 //! Faults (HTTP errors, dropped connections, odd framing) and hold points (the reply pauses until
 //! the test releases it) make awkward cases reproducible.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -29,6 +29,10 @@ pub struct Script {
     pub n_ctx: u64,
     pub vision: bool,
     pub steps: Vec<Step>,
+    /// Answers to `GET /search?q=…&format=json`, like a SearXNG server (`{ title, url, content }`).
+    pub search: Vec<Value>,
+    /// Web pages served at `/pages/<name>` (HTML).
+    pub pages: HashMap<String, String>,
 }
 
 impl Default for Script {
@@ -38,6 +42,8 @@ impl Default for Script {
             n_ctx: 32_768,
             vision: false,
             steps: Vec::new(),
+            search: Vec::new(),
+            pages: HashMap::new(),
         }
     }
 }
@@ -288,6 +294,8 @@ impl MockServer {
             .route("/props", get(props))
             .route("/health", get(health))
             .route("/tokenize", post(tokenize))
+            .route("/search", get(search))
+            .route("/pages/{name}", get(page))
             .route("/__mock/script", post(set_script))
             .route("/__mock/release/{hold}", post(release))
             .route("/__mock/requests", get(requests))
@@ -776,6 +784,22 @@ async fn models(State(shared): State<Arc<Shared>>) -> Json<Value> {
     Json(
         json!({ "object": "list", "data": [{ "id": model, "object": "model", "owned_by": "hearth-mock" }] }),
     )
+}
+
+/// A SearXNG-style search: the scripted results, whatever the query.
+async fn search(State(shared): State<Arc<Shared>>) -> Json<Value> {
+    Json(json!({ "results": lock(&shared.script).search }))
+}
+
+async fn page(State(shared): State<Arc<Shared>>, Path(name): Path<String>) -> Response {
+    match lock(&shared.script).pages.get(&name) {
+        Some(html) => (
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            html.clone(),
+        )
+            .into_response(),
+        None => (StatusCode::NOT_FOUND, "no such page").into_response(),
+    }
 }
 
 async fn props(State(shared): State<Arc<Shared>>) -> Json<Value> {

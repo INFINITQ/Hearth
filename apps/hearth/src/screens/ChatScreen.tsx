@@ -2,6 +2,7 @@ import { Composer } from '../components/Composer';
 import { ContextMeter } from '../components/ContextMeter';
 import { ParamsPopover } from '../components/ParamsPopover';
 import { RunErrorBanner, Transcript } from '../components/Transcript';
+import { WebToggle } from '../components/WebActivity';
 import { useApp } from '../stores/app';
 import { useChat } from '../stores/chat';
 
@@ -11,6 +12,16 @@ function send(text: string) {
 
 function stop() {
   useChat.getState().stop();
+}
+
+/** Next to Attach: chat settings and web search. */
+function ChatTools() {
+  return (
+    <>
+      <ParamsPopover />
+      <WebToggle />
+    </>
+  );
 }
 
 /** A conversation, or a greeting and the message box for a new one. */
@@ -29,7 +40,7 @@ export function ChatScreen() {
           running={run !== null}
           onSend={send}
           onStop={stop}
-          tools={<ParamsPopover />}
+          tools={<ChatTools />}
           status={<ContextMeter />}
           autoFocus
         />
@@ -54,7 +65,7 @@ function NewChat() {
           running={run !== null}
           onSend={send}
           onStop={stop}
-          tools={<ParamsPopover />}
+          tools={<ChatTools />}
           autoFocus
         />
         <div className="mt-4">
