@@ -24,7 +24,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::PCWSTR;
 
-fn os_error(err: windows::core::Error) -> io::Error {
+pub(crate) fn os_error(err: windows::core::Error) -> io::Error {
     io::Error::other(err.message())
 }
 
@@ -54,6 +54,12 @@ impl Job {
         }
         .map_err(os_error)?;
         Ok(job)
+    }
+
+    /// Puts a process (started suspended) in the job.
+    pub(crate) fn assign(&self, process: HANDLE) -> io::Result<()> {
+        // SAFETY: both handles are open.
+        unsafe { AssignProcessToJobObject(self.0, process) }.map_err(os_error)
     }
 
     /// Ends every process in the job at once.

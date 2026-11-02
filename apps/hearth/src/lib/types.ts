@@ -233,6 +233,20 @@ export type FileChange = {
 
 export type ShellsInfo = { gitBash: string | null; powershell: string | null };
 
+/** A shell in the terminal panel. It runs in Rust, so it outlives page reloads. */
+export type TerminalInfo = {
+  id: string;
+  shell: ShellKind;
+  cwd: string;
+  projectId: string | null;
+  running: boolean;
+  exitCode: number | null;
+  createdAt: number;
+};
+
+export type TerminalEvent =
+  { type: 'output'; data: string } | { type: 'exit'; code: number | null };
+
 export type Question = { questionId: string; callId: string; question: string; options: string[] };
 
 export type Usage = {

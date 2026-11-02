@@ -14,6 +14,7 @@ mod error;
 mod guard;
 mod links;
 mod runtime_commands;
+mod terminal_commands;
 mod theme;
 mod webview2;
 mod window;
@@ -27,6 +28,7 @@ use hearth_core::runs::RunManager;
 use hearth_core::runtime::Runtime;
 use hearth_core::settings::SettingsStore;
 use hearth_core::store::{ConnectionInput, Store, StoreError};
+use hearth_core::terminal::Terminals;
 use tauri::{Emitter, Manager};
 
 pub use error::{Error, Result};
@@ -95,6 +97,12 @@ fn main() {
             runtime_commands::runtime_telemetry,
             runtime_commands::pick_llama_server,
             runtime_commands::pick_model_folder,
+            terminal_commands::terminal_open,
+            terminal_commands::terminal_attach,
+            terminal_commands::terminal_write,
+            terminal_commands::terminal_resize,
+            terminal_commands::terminal_close,
+            terminal_commands::terminals_list,
         ])
         .setup(|app| {
             let data = data_dir(app.handle())?;
@@ -134,6 +142,7 @@ fn main() {
             app.manage(runs);
             app.manage(chat);
             app.manage(agent);
+            app.manage(Arc::new(Terminals::new()));
             app.manage(DataDir(data.clone()));
             window::create_main(app.handle(), &data)?;
             Ok(())

@@ -340,6 +340,62 @@ test.describe('commands, changes, undo and steering', () => {
     await expect(page.getByRole('list', { name: 'Waiting to be sent' })).toBeHidden();
   });
 
+  test('the terminal panel: a shell in the project, and the Agent tab with the agent’s commands', async () => {
+    await mock.setScript({
+      steps: [runCommand('echo agent-says-hi'), { reply: { content: 'Said hi.' } }],
+    });
+    const { page } = app;
+    const dir = join('test-results', 'screens');
+    mkdirSync(dir, { recursive: true });
+    await openProject(page);
+    await page.getByRole('button', { name: 'Terminal', exact: true }).click();
+    const panel = page.getByRole('region', { name: 'Terminal' });
+    await expect(panel.getByRole('tab', { name: 'Git Bash' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    const screen = panel.locator('.xterm-rows');
+    // Git Bash's prompt shows the folder it started in: the project.
+    const folder = project.split(/[\\/]/).pop()!;
+    await expect(screen).toContainText(folder, { timeout: 20_000 });
+    await panel.locator('.xterm').click();
+    await page.keyboard.type('echo hi-$((40+2))');
+    await page.keyboard.press('Enter');
+    await expect(screen).toContainText('hi-42');
+
+    // Hiding the panel keeps the shell; showing it again brings back what it showed.
+    await page.keyboard.press('Control+Backquote');
+    await expect(panel).toBeHidden();
+    await page.keyboard.press('Control+Backquote');
+    await expect(screen).toContainText('hi-42');
+    await expect(panel.getByRole('tab')).toHaveCount(2);
+
+    await setMode(page, 'Full auto');
+    await send(page, 'Say hi from a command.');
+    await expect(page.getByText('Said hi.', { exact: true })).toBeVisible();
+    await panel.getByRole('tab', { name: 'Agent' }).click();
+    const log = panel.getByRole('log', { name: 'Agent commands' });
+    await expect(log).toContainText('echo agent-says-hi');
+    await expect(log.locator('pre')).toContainText('agent-says-hi');
+
+    for (const theme of ['light', 'dark'] as const) {
+      await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme);
+      await panel.getByRole('tab', { name: 'Git Bash' }).click();
+      await page.waitForTimeout(250);
+      await page.screenshot({ path: join(dir, `m7-terminal-${theme}.png`) });
+    }
+    await panel.getByRole('tab', { name: 'Agent' }).click();
+    await page.waitForTimeout(150);
+    await page.screenshot({ path: join(dir, 'm7-agent-tab-dark.png') });
+
+    await panel.getByRole('button', { name: 'Close Git Bash' }).click();
+    await expect(panel.getByRole('tab', { name: 'Git Bash' })).toHaveCount(0);
+    await expect(panel.getByRole('tab', { name: 'Agent' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  });
+
   test('screenshots of commands and the Changes panel, for visual review', async () => {
     await mock.setScript({
       steps: [

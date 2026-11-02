@@ -1,8 +1,9 @@
-import { FileDiff, PanelLeft, SquarePen } from 'lucide-react';
+import { FileDiff, PanelLeft, SquarePen, SquareTerminal } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { type WindowControls, backend } from '../lib/backend';
 import { useApp } from '../stores/app';
 import { useChat } from '../stores/chat';
+import { useTerminal } from '../stores/terminal';
 import { ModelPicker } from './ModelPicker';
 import { newConversation } from './Sidebar';
 import { IconButton } from './ui/Button';
@@ -13,6 +14,7 @@ export function TitleBar() {
   const mode = useApp((s) => s.mode);
   const screen = useApp((s) => s.screen);
   const session = useChat((s) => s.session);
+  const project = useChat((s) => s.project);
   const inConversation = screen === 'chat' || screen === 'code';
   const title = inConversation && session?.mode === screen ? session.title : '';
   const focused = useWindowFocus();
@@ -46,10 +48,29 @@ export function TitleBar() {
       >
         {title}
       </div>
+      {screen === 'code' && project && <TerminalToggle />}
       {screen === 'code' && session?.mode === 'code' && <ChangesToggle />}
       {inConversation && <ModelPicker />}
       <CaptionButtons controls={backend().window} />
     </header>
+  );
+}
+
+/** Shows or hides the terminal panel under the session. */
+function TerminalToggle() {
+  const open = useTerminal((s) => s.open);
+  return (
+    <button
+      type="button"
+      aria-pressed={open}
+      aria-label="Terminal"
+      title="Terminal (Ctrl+`)"
+      onClick={() => useTerminal.getState().toggle()}
+      className="mr-1 flex h-7 items-center gap-1.5 rounded-full px-3 text-[12.5px] font-medium text-text-2 transition-colors duration-150 hover:bg-surface-3/70 hover:text-text aria-pressed:bg-surface-3 aria-pressed:text-text"
+    >
+      <SquareTerminal className="size-3.5" />
+      Terminal
+    </button>
   );
 }
 

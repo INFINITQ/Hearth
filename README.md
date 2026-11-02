@@ -27,8 +27,8 @@ In development. Milestones:
 | M4  | Coding agent: commands, undo, diff review, stop and steer   | done  |
 | M5  | llama-server runtime manager and Models page                | done  |
 | M6  | Context management (compaction)                             | done  |
-| M7  | Terminal panel                                              | next  |
-| M8  | Web search and fetch                                        |       |
+| M7  | Terminal panel                                              | done  |
+| M8  | Web search and fetch                                        | next  |
 | M9  | MCP servers                                                 |       |
 | M10 | Attachments and images                                      |       |
 | M11 | Polish, installer, docs                                     |       |

@@ -1,25 +1,50 @@
 // Tool calls in coding sessions: their names, titles before they run, and their answers.
 
-import type { Message, Todo, ToolCall } from './types';
+import type { Message, Todo, ToolCall, ToolStatus } from './types';
 
 /** The same aliases hearth-core accepts (agent/tools.rs `canonical_name`), for display. */
 const ALIASES: Record<string, string> = {
   read: 'read_file',
   cat: 'read_file',
   view: 'read_file',
+  open_file: 'read_file',
   ls: 'list_dir',
   list: 'list_dir',
   list_directory: 'list_dir',
+  list_files: 'list_dir',
   find_files: 'glob',
+  file_search: 'glob',
   search: 'grep',
+  search_file_content: 'grep',
   rg: 'grep',
+  ripgrep: 'grep',
   write: 'write_file',
   create_file: 'write_file',
+  write_to_file: 'write_file',
   edit: 'edit_file',
   str_replace: 'edit_file',
   replace: 'edit_file',
+  replace_in_file: 'edit_file',
+  str_replace_editor: 'edit_file',
   todowrite: 'todo_write',
+  update_todos: 'todo_write',
+  todo: 'todo_write',
   ask: 'ask_user',
+  ask_followup_question: 'ask_user',
+  question: 'ask_user',
+  bash: 'run_command',
+  shell: 'run_command',
+  run_shell_command: 'run_command',
+  execute_command: 'run_command',
+  terminal: 'run_command',
+  powershell: 'run_command',
+  exec: 'run_command',
+  bash_output: 'command_output',
+  read_output: 'command_output',
+  get_output: 'command_output',
+  kill_shell: 'kill_process',
+  kill_bash: 'kill_process',
+  stop_process: 'kill_process',
 };
 
 export function canonicalTool(name: string): string {
@@ -86,6 +111,44 @@ export function answersByStep(messages: Message[]): Map<string, Map<string, Mess
     }
   }
   return steps;
+}
+
+/** A command the agent ran (or runs now), for the terminal panel's Agent tab. */
+export type AgentCommand = {
+  callId: string;
+  command: string;
+  /** Saved output; a running command's output arrives live instead. */
+  output: string | null;
+  exitCode: number | null;
+  durationMs: number | null;
+  /** `pending`: not answered yet (running, or waiting for permission). */
+  status: ToolStatus | 'pending';
+};
+
+/** The commands the agent ran in a session, oldest first, each with its answer's output. */
+export function agentCommands(messages: Message[]): AgentCommand[] {
+  const steps = answersByStep(messages);
+  const commands: AgentCommand[] = [];
+  for (const message of messages) {
+    if (message.role !== 'assistant' || !message.toolCalls) continue;
+    const answers = steps.get(message.id);
+    for (const call of message.toolCalls) {
+      if (canonicalTool(call.function.name) !== 'run_command') continue;
+      const answer = answers?.get(call.id);
+      const display = answer?.toolDisplay;
+      const args = parseArgs(call);
+      const command = display?.command ?? args.command ?? args.cmd;
+      commands.push({
+        callId: call.id,
+        command: typeof command === 'string' ? command : '',
+        output: display?.output ?? null,
+        exitCode: display?.exitCode ?? null,
+        durationMs: display?.durationMs ?? null,
+        status: answer ? (answer.toolStatus ?? 'ok') : 'pending',
+      });
+    }
+  }
+  return commands;
 }
 
 /** The newest to-do list in a session. */

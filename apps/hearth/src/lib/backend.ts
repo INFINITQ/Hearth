@@ -25,9 +25,12 @@ import {
   type SessionSummary,
   type SessionView,
   type Settings,
+  type ShellKind,
   type ShellsInfo,
   type StartedRun,
   type SystemInfo,
+  type TerminalEvent,
+  type TerminalInfo,
 } from './types';
 
 export type CaptionState = 'enter' | 'leave' | 'press' | 'release';
@@ -96,6 +99,21 @@ export interface ChatBackend {
   /** Undoes the file changes of task `turn` and later ones; returns the files put back. */
   sessionUndo(sessionId: string, turn: number): Promise<string[]>;
   shellsInfo(): Promise<ShellsInfo>;
+
+  /** Starts a shell (the agent's shell setting when `shell` is null) in a project's folder. */
+  terminalOpen(
+    shell: ShellKind | null,
+    projectId: string | null,
+    cols: number,
+    rows: number,
+  ): Promise<TerminalInfo>;
+  /** Streams a terminal's output, starting with what it showed so far. */
+  terminalAttach(id: string, onEvent: (e: TerminalEvent) => void): Promise<void>;
+  terminalWrite(id: string, data: string): Promise<void>;
+  terminalResize(id: string, cols: number, rows: number): Promise<void>;
+  /** Ends the shell and everything started in it. */
+  terminalClose(id: string): Promise<void>;
+  terminalsList(): Promise<TerminalInfo[]>;
 
   /** The Models page: llama-server, folders, models and their state (`refresh`: probe and rescan). */
   runtimeOverview(refresh: boolean): Promise<RuntimeOverview>;
@@ -209,6 +227,17 @@ export function tauriBackend(): Backend {
     sessionRevert: (sessionId, path) => invoke('session_revert', { sessionId, path }),
     sessionUndo: (sessionId, turn) => invoke('session_undo', { sessionId, turn }),
     shellsInfo: () => invoke('shells_info'),
+    terminalOpen: (shell, projectId, cols, rows) =>
+      invoke('terminal_open', { shell, projectId, cols, rows }),
+    terminalAttach: (id, onEvent) => {
+      const events = new Channel<TerminalEvent>();
+      events.onmessage = onEvent;
+      return invoke('terminal_attach', { id, channel: events });
+    },
+    terminalWrite: (id, data) => invoke('terminal_write', { id, data }),
+    terminalResize: (id, cols, rows) => invoke('terminal_resize', { id, cols, rows }),
+    terminalClose: (id) => invoke('terminal_close', { id }),
+    terminalsList: () => invoke('terminals_list'),
     runtimeOverview: (refresh) => invoke('runtime_overview', { refresh }),
     modelLoad: (modelId) => invoke('model_load', { modelId }),
     modelUnload: (modelId) => invoke('model_unload', { modelId }),

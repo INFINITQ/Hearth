@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { answersByStep, callTitle, canonicalTool, latestTodos } from './toolCalls';
+import { agentCommands, answersByStep, callTitle, canonicalTool, latestTodos } from './toolCalls';
 import type { Message, ToolCall } from './types';
 
 const call = (name: string, args: unknown): ToolCall => ({
@@ -59,5 +59,47 @@ describe('tool calls', () => {
     expect(steps.get('a2')?.get('call_0')?.id).toBe('t2');
     expect(latestTodos([first, second])[0]!.status).toBe('completed');
     expect(latestTodos([])).toEqual([]);
+  });
+
+  it('lists the commands the agent ran, with their output, for the Agent tab', () => {
+    const step = (id: string, calls: ToolCall[]): Message => ({
+      ...tool(id, ''),
+      role: 'assistant',
+      toolCallId: null,
+      toolCalls: calls,
+    });
+    const ran = { ...call('Bash', { command: 'npm test' }), id: 'c1' };
+    const read = { ...call('read_file', { path: 'a.txt' }), id: 'c2' };
+    const waiting = { ...call('run_command', { cmd: 'ls' }), id: 'c3' };
+    const answer = {
+      ...tool('t1', 'c1', {
+        title: 'Run npm test',
+        command: 'npm test',
+        output: '3 passed',
+        exitCode: 0,
+        durationMs: 1200,
+      }),
+      toolStatus: 'ok' as const,
+    };
+    const commands = agentCommands([step('a1', [ran, read]), answer, step('a2', [waiting])]);
+    expect(commands).toEqual([
+      {
+        callId: 'c1',
+        command: 'npm test',
+        output: '3 passed',
+        exitCode: 0,
+        durationMs: 1200,
+        status: 'ok',
+      },
+      {
+        callId: 'c3',
+        command: 'ls',
+        output: null,
+        exitCode: null,
+        durationMs: null,
+        status: 'pending',
+      },
+    ]);
+    expect(canonicalTool('kill_shell')).toBe('kill_process');
   });
 });

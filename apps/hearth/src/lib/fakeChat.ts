@@ -14,6 +14,8 @@ import type {
   RunInfo,
   Session,
   SessionView,
+  TerminalEvent,
+  TerminalInfo,
   ToolCall,
   ToolDisplay,
   ToolStatus,
@@ -113,6 +115,15 @@ export function fakeChat(): ChatBackend {
   const waits = new Map<string, (answer: string) => void>();
   const sessionListeners = new Set<() => void>();
   const runListeners = new Set<(info: RunInfo) => void>();
+  const terminals = new Map<
+    string,
+    {
+      info: TerminalInfo;
+      line: string;
+      shown: string;
+      listener: ((e: TerminalEvent) => void) | null;
+    }
+  >();
   let counter = 0;
   const newId = () => `fake-${Date.now().toString(36)}-${(counter++).toString(36)}`;
   const changed = () => sessionListeners.forEach((listener) => listener());
@@ -451,6 +462,52 @@ export function fakeChat(): ChatBackend {
       powershell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     }),
 
+    // A pretend shell: it echoes what you type and answers a few commands.
+    terminalOpen: async (shell, projectId) => {
+      const info: TerminalInfo = {
+        id: newId(),
+        shell: shell ?? 'git_bash',
+        cwd: (projectId && projects.get(projectId)?.path) || 'C:\\Users\\you',
+        projectId,
+        running: true,
+        exitCode: null,
+        createdAt: Date.now(),
+      };
+      terminals.set(info.id, { info, line: '', shown: '', listener: null });
+      printTerminal(info.id, terminalPrompt(info));
+      return info;
+    },
+    terminalAttach: async (id, onEvent) => {
+      const terminal = terminals.get(id);
+      if (!terminal) throw new Error('This terminal has closed.');
+      terminal.listener = onEvent;
+      if (terminal.shown) onEvent({ type: 'output', data: terminal.shown });
+    },
+    terminalWrite: async (id, data) => {
+      const terminal = terminals.get(id);
+      if (!terminal) return;
+      for (const char of data) {
+        if (char === '\r') {
+          const reply = fakeShellReply(terminal.line.trim());
+          terminal.line = '';
+          printTerminal(id, `\r\n${reply}${terminalPrompt(terminal.info)}`);
+        } else if (char === '\x7f') {
+          if (terminal.line) {
+            terminal.line = terminal.line.slice(0, -1);
+            printTerminal(id, '\b \b');
+          }
+        } else if (char >= ' ') {
+          terminal.line += char;
+          printTerminal(id, char);
+        }
+      }
+    },
+    terminalResize: async () => {},
+    terminalClose: async (id) => {
+      terminals.delete(id);
+    },
+    terminalsList: async () => [...terminals.values()].map((t) => t.info),
+
     runtimeOverview: async () => ({
       server: {
         path: 'C:\\Tools\\llama.cpp\\llama-server.exe',
@@ -492,6 +549,13 @@ export function fakeChat(): ChatBackend {
       return () => runtimeListeners.delete(listener);
     },
   };
+
+  function printTerminal(id: string, data: string) {
+    const terminal = terminals.get(id);
+    if (!terminal) return;
+    terminal.shown += data;
+    terminal.listener?.({ type: 'output', data });
+  }
 
   /** A scripted agent task: read a file, plan, then edit it (asking first in Ask mode). */
   function agentRun(
@@ -664,4 +728,18 @@ export function fakeChat(): ChatBackend {
     changed();
     return { runId, userMessageId: user.id };
   }
+}
+
+function terminalPrompt(info: TerminalInfo): string {
+  const folder = info.cwd.split(/[\\/]/).pop() ?? '';
+  return info.shell === 'powershell'
+    ? `PS ${info.cwd}> `
+    : `\x1b[32myou@hearth\x1b[0m \x1b[35mMINGW64\x1b[0m \x1b[33m~/${folder}\x1b[0m\r\n$ `;
+}
+
+function fakeShellReply(line: string): string {
+  if (!line) return '';
+  if (line.startsWith('echo ')) return `${line.slice(5)}\r\n`;
+  if (line === 'ls') return 'README.md  src  tests\r\n';
+  return `${line.split(' ')[0]}: not available in the browser preview\r\n`;
 }

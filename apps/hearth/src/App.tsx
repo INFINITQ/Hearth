@@ -10,6 +10,7 @@ import { SettingsScreen } from './screens/SettingsScreen';
 import { useApp } from './stores/app';
 import { useChat } from './stores/chat';
 import { useModels } from './stores/models';
+import { useTerminal } from './stores/terminal';
 
 export function App() {
   const screen = useApp((s) => s.screen);
@@ -54,6 +55,7 @@ function useConversations() {
     const chat = useChat.getState();
     void chat.loadLists();
     void chat.loadProjects();
+    void useTerminal.getState().load();
     void backend()
       .runsActive()
       .then((runs) => runs.forEach((run) => useChat.getState().setRunState(run)));
@@ -75,6 +77,13 @@ function useShortcuts() {
     const onKey = (event: KeyboardEvent) => {
       if (!event.ctrlKey || event.altKey || event.metaKey) return;
       const app = useApp.getState();
+      if (event.code === 'Backquote') {
+        event.preventDefault();
+        if (app.screen === 'code' && useChat.getState().project) useTerminal.getState().toggle();
+        return;
+      }
+      // Everything else typed in a terminal belongs to the shell (Ctrl+B, Ctrl+N…).
+      if (event.target instanceof Element && event.target.closest('.xterm')) return;
       const key = event.key.toLowerCase();
       if (key === 'b' && !event.shiftKey) {
         event.preventDefault();

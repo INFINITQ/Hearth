@@ -109,8 +109,25 @@ Where the build stands (plan: README "Status"; engineering details: build-notes.
     - Vitest: 23.
     - Playwright E2E: 32.
 
-## Next: M7, the terminal panel
+- **M7**: the terminal panel.
+  - **Backend** (`hearth-core/src/terminal/`): ConPTY pseudo consoles made with the `windows`
+    crate (no extra dependency); shells start suspended and run in their own Job Object; a
+    UTF-8 stream decoder; 256 KB of scrollback replayed when the UI attaches; exit codes.
+    Tauri commands `terminal_open/attach/write/resize/close`, `terminals_list`.
+  - **UI:** the panel under coding sessions (Terminal button, Ctrl+`), xterm.js 6 tabs per
+project (Git Bash or PowerShell from "+"), drag or arrow keys to resize, Ctrl+C copies a
+selection and Ctrl+V pastes, themes for light and dark. The Agent tab lists the agent's
+commands with their live output. A Vite plugin fixes xterm.js under `freezePrototype`.
+  - **Fixed:** the UI's tool-name aliases now match hearth-core's (`Bash`, `shell`…).
+  - **Tests (all green):**
+    - Rust: 113 core unit (real ConPTY sessions with cmd.exe), 17 agent, 9 chat, 11 client,
+      1 runtime, 4 app.
+    - Vitest: 24.
+    - Playwright E2E: 33 (a real Git Bash in the panel).
 
-- ConPTY shells (Git Bash by default, PowerShell) in xterm.js tabs below the coding session.
-- Each terminal in its own Job Object; closing a tab or the app ends its processes.
-- An "Agent" tab that follows the output of the agent's commands.
+## Next: M8, web search and fetch
+
+- Search providers: DuckDuckGo (default, no key), Brave, Tavily, SearXNG; page fetch to
+  readable Markdown.
+- Chat: a web toggle and source chips from the actual results.
+- Agent: `web_search` and `web_fetch` tools in the Network permission class.

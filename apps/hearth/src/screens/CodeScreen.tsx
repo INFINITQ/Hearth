@@ -8,11 +8,13 @@ import { CodeTranscript } from '../components/code/CodeTranscript';
 import { ModeSwitch, cycleMode } from '../components/code/ModeSwitch';
 import { TodoPanel } from '../components/code/TodoPanel';
 import { TrustDialog } from '../components/code/TrustDialog';
+import { TerminalPanel } from '../components/terminal/TerminalPanel';
 import { Button } from '../components/ui/Button';
 import { latestTodos } from '../lib/toolCalls';
 import type { Project } from '../lib/types';
 import { useApp } from '../stores/app';
 import { useChat } from '../stores/chat';
+import { useTerminal } from '../stores/terminal';
 
 function send(text: string) {
   void useChat.getState().send(text, 'code');
@@ -29,6 +31,7 @@ export function CodeScreen() {
   const messages = useChat((s) => s.messages);
   const run = useChat((s) => s.run);
   const started = session?.mode === 'code' && (messages.length > 0 || run !== null);
+  const terminalOpen = useTerminal((s) => s.open);
   return (
     <>
       {!project ? (
@@ -38,6 +41,7 @@ export function CodeScreen() {
       ) : (
         <NewSession project={project} />
       )}
+      {project && terminalOpen && <TerminalPanel project={project} />}
       <TrustDialog />
     </>
   );

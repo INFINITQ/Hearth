@@ -319,7 +319,9 @@ full_blob, model_label, finish_reason, status streaming|complete|interrupted|err
   - Storage and IDs: rusqlite (bundled, FTS5) + rusqlite_migration; uuid v7, jiff.
   - Search, diffs, text: ignore/globset/grep-searcher/grep-regex; similar, strsim; encoding_rs,
     chardetng; dunce; strip-ansi-escapes.
-  - Windows: windows 0.62 (Job Objects, Toolhelp32, DPAPI); which; portable-pty 0.9.
+  - Windows: windows 0.62 (Job Objects, Toolhelp32, DPAPI, ConPTY); which. Terminals use ConPTY
+    directly (`terminal/pty.rs`) rather than portable-pty, so a shell can start suspended and
+    join its Job Object before it runs.
   - MCP: rmcp `=3.8.0`, behind one module, with stderr piped.
   - Web: dom_smoothie, htmd, dom_query; image (png, jpeg, webp, gif).
   - System: nvml-wrapper, sysinfo; tracing.
@@ -330,7 +332,8 @@ full_blob, model_label, finish_reason, status streaming|complete|interrupted|err
   - UI: radix-ui, lucide-react, react-resizable-panels, cmdk.
   - Markdown: streamdown + @streamdown/code + @streamdown/math. Fallback: react-markdown + remark-gfm
     - remark-math + rehype-katex + shiki with the JS engine.
-  - Terminal: @xterm/xterm + addon-fit.
+  - Terminal: @xterm/xterm 6 + addon-fit (a Vite plugin fixes its one `toString` assignment,
+    which `freezePrototype` would reject).
   - Lists, PDF, fonts: @tanstack/react-virtual; pdfjs-dist 6.4.299 (worker, `isEvalSupported:false`);
     @fontsource-variable/inter and /jetbrains-mono.
   - Tests: @testing-library/react + user-event.

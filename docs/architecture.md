@@ -93,6 +93,25 @@ Hearth runs local models itself with llama.cpp's `llama-server`, one process per
 - **Using a model:** a `local` model reference resolves to `Endpoint::Local`; the first request
   loads the server (the run shows "Loading <model>…") and later ones reuse it.
 
+## Terminals (`hearth-core/src/terminal/`)
+
+The terminal panel under a coding session runs real shells (Git Bash by default, or
+PowerShell) in Windows pseudo consoles (ConPTY).
+
+- **Starting:** `pty.rs` creates the pseudo console and starts the shell suspended, puts it in
+  its own Job Object and only then lets it run, like every other child process. Closing a tab
+  (or Hearth) ends the shell and everything started in it. Git Bash starts as a login shell in
+  the project folder (`CHERE_INVOKING`), with `TERM=xterm-256color`.
+- **Living in Rust:** `Terminals` keeps each shell with the last 256 KB of its output. The UI
+  attaches over a channel and first gets that scrollback, so a terminal keeps running (and
+  showing what it showed) when the panel is hidden or the page reloads. Keystrokes go through a
+  writer thread, so a busy shell never blocks a command.
+- **The UI** draws terminals with xterm.js in tabs, one panel per project, next to the Agent tab,
+  which lists the commands the agent ran in the session with their output as it arrives.
+  Ctrl+`shows and hides the panel. xterm.js assigns`toString`on an object, which Tauri's
+frozen`Object.prototype`forbids, so`vite.config.ts` rewrites that one line as a property
+  definition.
+
 ## Context management (`hearth-core/src/context.rs`)
 
 Chats and coding tasks keep their requests inside the model's context window.
