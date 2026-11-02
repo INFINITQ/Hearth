@@ -4,15 +4,16 @@
 //! session ("Allow for the session"). Reading inside the project never asks. Changes, and
 //! anything outside the project, depend on the mode:
 //!
-//! | Mode      | read outside | edit inside | edit outside | commands, MCP | web  |
-//! |-----------|--------------|-------------|--------------|---------------|------|
-//! | Plan      | ask          | deny        | deny         | deny          | ask  |
-//! | Ask       | ask          | ask         | ask          | ask           | ask  |
-//! | Auto-edit | ask          | allow       | ask          | ask           | ask  |
-//! | Full auto | allow        | allow       | allow        | allow         | allow|
+//! | Mode      | read outside | edit inside | edit outside | commands      | MCP   | web  |
+//! |-----------|--------------|-------------|--------------|---------------|-------|------|
+//! | Plan      | ask          | deny        | deny         | read-only     | deny  | ask  |
+//! | Ask       | ask          | ask         | ask          | ask           | ask   | ask  |
+//! | Auto-edit | ask          | allow       | ask          | read-only, rules | ask | ask  |
+//! | Full auto | allow        | allow       | allow        | allow         | allow | allow|
 //!
-//! Commands (M4), web tools (M8) and MCP tools (M9) add their own refinements: a safe list of
-//! read-only commands, per-domain fetches, and dangerous commands that always ask.
+//! Commands: "read-only" means a plain command from a short list (`ls`, `git status`…), and
+//! "rules" are the project's "Always allow" prefixes (`npm test`). Dangerous commands (wiping a
+//! drive, force-pushing…) always ask, whatever the mode or rules.
 
 use std::collections::HashSet;
 
@@ -109,7 +110,16 @@ impl Grants {
     }
 }
 
-pub fn decide(mode: PermissionMode, prepared: &Prepared, grants: &Grants) -> Verdict {
+pub const PLAN_COMMAND_DENIAL: &str = "Plan mode only runs read-only commands (like ls, git status \
+or rg), so this one wasn't run. Finish looking around, then reply with your plan.";
+
+/// `rules`: the project's "Always allow" command prefixes.
+pub fn decide(
+    mode: PermissionMode,
+    prepared: &Prepared,
+    grants: &Grants,
+    rules: &[String],
+) -> Verdict {
     use PermissionMode::{AutoEdit, FullAuto, Plan};
     let granted = grants.covers(prepared);
     match prepared.class {
@@ -123,7 +133,28 @@ pub fn decide(mode: PermissionMode, prepared: &Prepared, grants: &Grants) -> Ver
             _ if granted => Verdict::Allow,
             _ => Verdict::Ask,
         },
-        Class::Execute | Class::External => match mode {
+        Class::Execute => {
+            let Some(check) = &prepared.command else {
+                return Verdict::Ask;
+            };
+            let command = match &prepared.action {
+                super::tools::Action::Run { command, .. } => command.as_str(),
+                _ => "",
+            };
+            let ruled = rules
+                .iter()
+                .any(|rule| super::command::rule_covers(rule, command));
+            match mode {
+                _ if check.danger.is_some() => Verdict::Ask,
+                Plan if check.read_only => Verdict::Allow,
+                Plan => Verdict::Deny(PLAN_COMMAND_DENIAL.into()),
+                FullAuto => Verdict::Allow,
+                AutoEdit if check.read_only || ruled => Verdict::Allow,
+                _ if ruled || granted => Verdict::Allow,
+                _ => Verdict::Ask,
+            }
+        }
+        Class::External => match mode {
             Plan => Verdict::Deny(PLAN_DENIAL.into()),
             FullAuto => Verdict::Allow,
             _ if granted => Verdict::Allow,
@@ -144,27 +175,40 @@ pub struct Choice {
     pub label: String,
 }
 
-/// The buttons a prompt offers for a call.
+/// The buttons a prompt offers for a call. Commands get "Always allow" for their prefix in the
+/// project, unless they're dangerous (those ask every time).
 pub fn choices(prepared: &Prepared) -> Vec<Choice> {
-    let session = match (prepared.class, prepared.inside) {
-        (Class::Edit, true) => "Allow edits this session",
-        (_, false) => "Allow this folder for the session",
-        _ => "Allow for the session",
-    };
-    vec![
-        Choice {
-            id: "allow_once",
-            label: "Allow".into(),
-        },
-        Choice {
+    let middle = match (prepared.class, prepared.inside, &prepared.command) {
+        (Class::Execute, _, Some(check)) if check.danger.is_none() && !check.prefix.is_empty() => {
+            Some(Choice {
+                id: "allow_always",
+                label: format!("Always allow `{}` here", check.prefix),
+            })
+        }
+        (Class::Execute, _, _) => None,
+        (Class::Edit, true, _) => Some(Choice {
             id: "allow_session",
-            label: session.into(),
-        },
-        Choice {
-            id: "deny",
-            label: "Deny".into(),
-        },
-    ]
+            label: "Allow edits this session".into(),
+        }),
+        (_, false, _) => Some(Choice {
+            id: "allow_session",
+            label: "Allow this folder for the session".into(),
+        }),
+        _ => Some(Choice {
+            id: "allow_session",
+            label: "Allow for the session".into(),
+        }),
+    };
+    let mut choices = vec![Choice {
+        id: "allow_once",
+        label: "Allow".into(),
+    }];
+    choices.extend(middle);
+    choices.push(Choice {
+        id: "deny",
+        label: "Deny".into(),
+    });
+    choices
 }
 
 #[cfg(test)]
@@ -182,6 +226,7 @@ mod tests {
             path: Some(path.into()),
             inside,
             diff: None,
+            command: None,
             action: Action::ReadFile {
                 abs: PathBuf::from(path),
                 display: path.into(),
@@ -189,6 +234,71 @@ mod tests {
                 limit: 10,
             },
         }
+    }
+
+    fn run(command: &str) -> Prepared {
+        Prepared {
+            tool: "run_command",
+            class: Class::Execute,
+            title: format!("Run {command}"),
+            path: Some(".".into()),
+            inside: true,
+            diff: None,
+            command: Some(crate::agent::command::check(command)),
+            action: Action::Run {
+                command: command.into(),
+                cwd: PathBuf::from("."),
+                timeout_s: 120,
+                background: false,
+            },
+        }
+    }
+
+    /// Without any "Always allow" rules.
+    fn decide(mode: PermissionMode, prepared: &Prepared, grants: &Grants) -> Verdict {
+        super::decide(mode, prepared, grants, &[])
+    }
+
+    #[test]
+    fn commands_by_mode_rule_and_danger() {
+        use PermissionMode::*;
+        let none = Grants::default();
+        let rules = vec!["npm test".to_owned()];
+        let (status, test, push) = (run("git status"), run("npm test"), run("git push --force"));
+        let verdicts = |mode| {
+            (
+                super::decide(mode, &status, &none, &rules),
+                super::decide(mode, &test, &none, &[]),
+                super::decide(mode, &test, &none, &rules),
+                super::decide(mode, &push, &none, &rules),
+            )
+        };
+        let deny = Verdict::Deny(PLAN_COMMAND_DENIAL.into());
+        assert_eq!(
+            verdicts(Plan),
+            (Verdict::Allow, deny.clone(), deny, Verdict::Ask)
+        );
+        assert_eq!(
+            verdicts(Ask),
+            (Verdict::Ask, Verdict::Ask, Verdict::Allow, Verdict::Ask)
+        );
+        assert_eq!(
+            verdicts(AutoEdit),
+            (Verdict::Allow, Verdict::Ask, Verdict::Allow, Verdict::Ask)
+        );
+        assert_eq!(
+            verdicts(FullAuto),
+            (Verdict::Allow, Verdict::Allow, Verdict::Allow, Verdict::Ask)
+        );
+
+        let ids = |p: &Prepared| choices(p).iter().map(|c| c.id).collect::<Vec<_>>();
+        assert_eq!(ids(&test), ["allow_once", "allow_always", "deny"]);
+        assert_eq!(choices(&test)[1].label, "Always allow `npm test` here");
+        assert_eq!(
+            ids(&push),
+            ["allow_once", "deny"],
+            "dangerous commands can't be always-allowed"
+        );
     }
 
     #[test]

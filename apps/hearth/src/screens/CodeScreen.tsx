@@ -1,7 +1,8 @@
-import { FolderOpen, FolderPlus, SquareTerminal } from 'lucide-react';
+import { Clock, FolderOpen, FolderPlus, SquareTerminal } from 'lucide-react';
 import { useMemo } from 'react';
 import { Composer } from '../components/Composer';
 import { RunErrorBanner } from '../components/Transcript';
+import { ChangesPanel } from '../components/code/ChangesPanel';
 import { CodeTranscript } from '../components/code/CodeTranscript';
 import { ModeSwitch, cycleMode } from '../components/code/ModeSwitch';
 import { TodoPanel } from '../components/code/TodoPanel';
@@ -141,25 +142,47 @@ function NewSession({ project }: { project: Project }) {
 function Session({ project }: { project: Project }) {
   const run = useChat((s) => s.run);
   const messages = useChat((s) => s.messages);
+  const changesOpen = useChat((s) => s.changesOpen);
   const todos = useMemo(() => latestTodos(messages), [messages]);
+  const queued = run?.queued ?? [];
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <CodeTranscript />
-      <div className="mx-auto w-full max-w-[800px] px-6 pb-3">
-        {todos.length > 0 && <TodoPanel todos={todos} />}
-        <Composer
-          placeholder={run ? 'Working… (Esc stops)' : 'Describe the next step…'}
-          running={run !== null}
-          onSend={send}
-          onStop={stop}
-          tools={<ModeSwitch />}
-          onShiftTab={cycleMode}
-          autoFocus
-        />
-        <p className="mt-2 truncate text-center text-[11.5px] text-text-3" title={project.path}>
-          Working in {project.path}. Check changes before you rely on them.
-        </p>
+    <div className="flex min-h-0 flex-1">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <CodeTranscript />
+        <div className="mx-auto w-full max-w-[800px] px-6 pb-3">
+          {todos.length > 0 && <TodoPanel todos={todos} />}
+          {queued.length > 0 && (
+            <ul aria-label="Waiting to be sent" className="mb-2 space-y-1">
+              {queued.map((text, index) => (
+                <li
+                  key={index}
+                  className="flex items-center gap-2 rounded-control bg-surface-2 px-3 py-1.5 text-[12.5px] text-text-2"
+                >
+                  <Clock className="size-3.5 shrink-0 text-text-3" />
+                  <span className="min-w-0 flex-1 truncate" title={text}>
+                    {text}
+                  </span>
+                  <span className="shrink-0 text-text-3">joins after this step</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <Composer
+            placeholder={run ? 'Add to the task, or press Esc to stop…' : 'Describe the next step…'}
+            running={run !== null}
+            sendWhileRunning
+            onSend={send}
+            onStop={stop}
+            tools={<ModeSwitch />}
+            onShiftTab={cycleMode}
+            autoFocus
+          />
+          <p className="mt-2 truncate text-center text-[11.5px] text-text-3" title={project.path}>
+            Working in {project.path}. Check changes before you rely on them.
+          </p>
+        </div>
       </div>
+      {changesOpen && <ChangesPanel />}
     </div>
   );
 }

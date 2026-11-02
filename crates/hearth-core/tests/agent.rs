@@ -467,3 +467,239 @@ async fn unreadable_arguments_get_an_explanation() {
         sink.events()
     );
 }
+
+// ── M4: commands, undo, steering ──────────────────────────────────────────────────────────────
+
+fn has_bash() -> bool {
+    use hearth_core::agent::shell::{Shell, ShellKind};
+    let found = Shell::find(ShellKind::GitBash).is_some();
+    if !found {
+        eprintln!("Git Bash isn't installed here; skipped");
+    }
+    found
+}
+
+fn run_command(command: &str) -> Reply {
+    Reply::tool_call("run_command", json!({ "command": command }))
+}
+
+#[tokio::test]
+async fn commands_run_and_their_output_streams() {
+    if !has_bash() {
+        return;
+    }
+    let script = Script::new()
+        .reply(run_command("echo hello-from-bash; exit 2"))
+        .expect_then(
+            vec![
+                Expect::LastToolResultContains("hello-from-bash".into()),
+                Expect::LastToolResultContains("(exit code 2,".into()),
+                Expect::SystemContains("Shell for run_command: Git Bash".into()),
+            ],
+            Reply::text("It printed and failed."),
+        );
+    let h = harness(script, Some("full_auto")).await;
+    let (sink, _) = h.start("Run it.");
+    assert_eq!(
+        finished(&sink).await,
+        RunEnd::Completed,
+        "{:#?}",
+        sink.events()
+    );
+    let events = sink.events();
+    assert!(events.iter().any(
+        |e| matches!(e, RunEvent::ToolOutput { text, .. } if text.contains("hello-from-bash"))
+    ));
+    let path = h.store.active_path(&h.session_id).unwrap();
+    assert_eq!(
+        path[2].tool_status.as_deref(),
+        Some("error"),
+        "a non-zero exit shows as failed"
+    );
+    assert_eq!(path[2].tool_display.as_ref().unwrap()["exitCode"], 2);
+}
+
+#[tokio::test]
+async fn ask_mode_asks_before_commands_and_always_allow_is_remembered() {
+    if !has_bash() {
+        return;
+    }
+    let script = Script::new()
+        .reply(run_command("echo one"))
+        .reply(run_command("echo two"))
+        .reply(Reply::text("Both ran."));
+    let h = harness(script, Some("ask")).await;
+    let (sink, _) = h.start("Echo twice.");
+    let RunEvent::PermissionRequest {
+        request_id,
+        command,
+        choices,
+        ..
+    } = wait_for(&sink, "permission request", |e| {
+        matches!(e, RunEvent::PermissionRequest { .. })
+    })
+    .await
+    else {
+        unreachable!()
+    };
+    assert_eq!(command.as_deref(), Some("echo one"));
+    assert_eq!(choices[1].label, "Always allow `echo` here");
+    h.agent.resolve_permission(
+        &request_id,
+        PermissionReply {
+            decision: Decision::AllowAlways,
+            note: None,
+        },
+    );
+    assert_eq!(
+        finished(&sink).await,
+        RunEnd::Completed,
+        "{:#?}",
+        sink.events()
+    );
+    let prompts = sink
+        .events()
+        .iter()
+        .filter(|e| matches!(e, RunEvent::PermissionRequest { .. }))
+        .count();
+    assert_eq!(prompts, 1, "the second echo is allowed by the rule");
+    let project = h
+        .store
+        .session(&h.session_id)
+        .unwrap()
+        .workspace_id
+        .unwrap();
+    assert_eq!(h.store.rules(&project, "execute").unwrap(), ["echo"]);
+}
+
+#[tokio::test]
+async fn plan_mode_runs_only_read_only_commands() {
+    if !has_bash() {
+        return;
+    }
+    let script = Script::new()
+        .reply(run_command("ls src"))
+        .expect_then(
+            vec![Expect::LastToolResultContains("calc.py".into())],
+            run_command("touch made.txt"),
+        )
+        .expect_then(
+            vec![Expect::LastToolResultContains(
+                "only runs read-only commands".into(),
+            )],
+            Reply::text("Plan: …"),
+        );
+    let h = harness(script, Some("plan")).await;
+    let (sink, _) = h.start("Look around.");
+    assert_eq!(
+        finished(&sink).await,
+        RunEnd::Completed,
+        "{:#?}",
+        sink.events()
+    );
+    assert!(!h.project.path().join("made.txt").exists());
+}
+
+#[tokio::test]
+async fn stopping_a_command_ends_it_and_the_run() {
+    if !has_bash() {
+        return;
+    }
+    let h = harness(
+        Script::new().reply(run_command("sleep 30")),
+        Some("full_auto"),
+    )
+    .await;
+    let (sink, run_id) = h.start("Wait a while.");
+    wait_for(&sink, "the command to start", |e| {
+        matches!(e, RunEvent::ToolStarted { .. })
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let stopped_at = tokio::time::Instant::now();
+    h.runs.cancel(&run_id);
+    assert_eq!(finished(&sink).await, RunEnd::Cancelled);
+    assert!(
+        stopped_at.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        stopped_at.elapsed()
+    );
+    let path = h.store.active_path(&h.session_id).unwrap();
+    assert_eq!(path[2].tool_status.as_deref(), Some("cancelled"));
+}
+
+#[tokio::test]
+async fn undoing_a_task_restores_its_files_and_tells_the_model() {
+    let script = Script::new()
+        .reply(read_calc())
+        .reply(fix_calc())
+        .reply(Reply::tool_call(
+            "write_file",
+            json!({ "path": "notes.md", "content": "# Notes\n" }),
+        ))
+        .reply(Reply::text("Fixed and noted."))
+        .expect_then(
+            vec![Expect::LastUserContains(
+                "the user undid file changes".into(),
+            )],
+            Reply::text("I'll re-read."),
+        );
+    let h = harness(script, None).await;
+    let (sink, _) = h.start("Fix add() and take notes.");
+    assert_eq!(
+        finished(&sink).await,
+        RunEnd::Completed,
+        "{:#?}",
+        sink.events()
+    );
+    assert_eq!(h.file("src/calc.py"), "def add(a, b):\n    return a + b\n");
+
+    let changes = h.agent.changes(&h.session_id).unwrap();
+    let listed: Vec<(&str, usize, usize)> = changes
+        .iter()
+        .map(|c| (c.path.as_str(), c.added, c.removed))
+        .collect();
+    assert_eq!(listed, [("src/calc.py", 1, 1), ("notes.md", 1, 0)]);
+
+    let restored = h.agent.undo(&h.session_id, 1).unwrap();
+    assert_eq!(restored, ["src/calc.py", "notes.md"]);
+    assert_eq!(h.file("src/calc.py"), CALC);
+    assert!(!h.project.path().join("notes.md").exists());
+    assert!(h.agent.changes(&h.session_id).unwrap().is_empty());
+
+    let (sink, _) = h.start("Now what?");
+    assert_eq!(
+        finished(&sink).await,
+        RunEnd::Completed,
+        "{:#?}",
+        sink.events()
+    );
+}
+
+#[tokio::test]
+async fn messages_sent_while_working_join_the_next_step() {
+    let script = Script::new()
+        .reply(Reply::tool_call("glob", json!({ "pattern": "*.py" })).held("first"))
+        .expect_then(
+            vec![Expect::LastUserContains("Also look at the README".into())],
+            Reply::text("Looked at both."),
+        );
+    let h = harness(script, None).await;
+    let (sink, run_id) = h.start("Find the Python files.");
+    wait_for(&sink, "the first step", |e| {
+        matches!(e, RunEvent::MessageStarted { .. })
+    })
+    .await;
+    h.agent.steer(&run_id, "Also look at the README").unwrap();
+    h.server.release("first");
+    assert_eq!(
+        finished(&sink).await,
+        RunEnd::Completed,
+        "{:#?}",
+        sink.events()
+    );
+    use MessageRole::{Assistant, Tool, User};
+    assert_eq!(h.roles(), [User, Assistant, Tool, User, Assistant]);
+    assert!(sink.events().iter().any(|e| matches!(e, RunEvent::Steered { message } if message.content == "Also look at the README")));
+    assert!(h.agent.steer(&run_id, "too late").is_err());
+}

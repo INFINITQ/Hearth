@@ -6,6 +6,7 @@
 use std::path::Path;
 
 use super::paths::Workspace;
+use super::shell::{Shell, ShellKind};
 use super::text::TextFile;
 use super::tools::walker;
 
@@ -19,14 +20,16 @@ Don't guess at file contents, names or APIs.
 include enough surrounding lines for it to be unique. Use write_file for new files, or to replace a whole file.
 3. Keep changes focused on the task. Match the project's style, and don't reformat or rewrite code you weren't asked \
 to change.
-4. For a task with several steps, keep a to-do list with todo_write and mark items done as you go.
-5. When a tool reports an error, read it: it says what went wrong and how to fix the call. Don't repeat a call that \
+4. After changing code, run the project's tests or build with run_command when it has them, and fix what fails. \
+Start servers and watchers with background: true, then check them with command_output.
+5. For a task with several steps, keep a to-do list with todo_write and mark items done as you go.
+6. When a tool reports an error, read it: it says what went wrong and how to fix the call. Don't repeat a call that \
 failed the same way.
-6. Use ask_user only when you can't continue without the user's decision. Otherwise make a sensible choice and \
+7. Use ask_user only when you can't continue without the user's decision. Otherwise make a sensible choice and \
 mention it.
-7. Paths are relative to the project folder, with forward slashes. Stay inside the project unless the user asks \
+8. Paths are relative to the project folder, with forward slashes. Stay inside the project unless the user asks \
 otherwise.
-8. Be brief. Don't narrate every step. When you finish, say in a few sentences what you changed and anything the \
+9. Be brief. Don't narrate every step. When you finish, say in a few sentences what you changed and anything the \
 user should check.";
 
 /// Added to the newest user message while Plan mode is on (never saved).
@@ -40,15 +43,29 @@ const MAX_TOP_LEVEL: usize = 60;
 
 /// The environment part of the prompt, frozen when a session's first task starts. Project
 /// instructions are read only from folders the user trusts.
-pub fn snapshot(workspace: &Workspace, today: &str, trusted: bool) -> String {
+pub fn snapshot(
+    workspace: &Workspace,
+    today: &str,
+    trusted: bool,
+    shell: Option<&Shell>,
+) -> String {
     let root = workspace.root();
     let git = if root.join(".git").exists() {
         "yes"
     } else {
         "no"
     };
+    let shell = match shell {
+        Some(shell) if shell.kind == ShellKind::GitBash => {
+            "Git Bash: use bash syntax. There's no sudo or apt; Windows programs (git, node, python, py) work by name."
+                .to_owned()
+        }
+        Some(shell) => format!("{}: use PowerShell syntax.", shell.label()),
+        None => "none found, so run_command won't work.".to_owned(),
+    };
     let mut out = format!(
-        "<environment>\nOperating system: Windows 11\nProject folder: {} (in Git Bash: {})\nToday's date: {today}\n\
+        "<environment>\nOperating system: Windows 11\nProject folder: {} (in Git Bash: {})\n\
+         Shell for run_command: {shell}\nToday's date: {today}\n\
          Git repository: {git}\nAt the top of the project:\n{}</environment>",
         root.display(),
         workspace.posix_root(),
@@ -138,7 +155,12 @@ mod tests {
         .unwrap();
         let workspace = Workspace::new(dir.path()).unwrap();
 
-        let snapshot = snapshot(&workspace, "2026-11-02", true);
+        let bash = Shell {
+            kind: ShellKind::GitBash,
+            path: "bash.exe".into(),
+        };
+        let snapshot = snapshot(&workspace, "2026-11-02", true, Some(&bash));
+        assert!(snapshot.contains("Shell for run_command: Git Bash: use bash syntax."));
         assert!(snapshot.contains("Today's date: 2026-11-02"));
         assert!(snapshot.contains("Git repository: no"));
         assert!(
@@ -152,7 +174,8 @@ mod tests {
             "AGENTS.md wins over CLAUDE.md"
         );
 
-        let untrusted = super::snapshot(&workspace, "2026-11-02", false);
+        let untrusted = super::snapshot(&workspace, "2026-11-02", false, None);
+        assert!(untrusted.contains("none found, so run_command won't work."));
         assert!(!untrusted.contains("project_instructions"));
         assert!(system_prompt(&snapshot).starts_with(RULES));
     }

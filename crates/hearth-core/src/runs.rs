@@ -103,6 +103,11 @@ pub enum RunEvent {
         tool: String,
         title: String,
     },
+    /// Output from a running command, as it arrives.
+    ToolOutput {
+        call_id: String,
+        text: String,
+    },
     /// A tool call answered; `message` is the saved tool message.
     ToolFinished {
         call_id: String,
@@ -118,6 +123,9 @@ pub enum RunEvent {
         title: String,
         path: Option<String>,
         diff: Option<String>,
+        /// For commands: the command, and why it's dangerous if it is.
+        command: Option<String>,
+        danger: Option<String>,
         choices: Vec<Choice>,
     },
     PermissionResolved {
@@ -136,6 +144,10 @@ pub enum RunEvent {
     },
     Todos {
         items: Vec<Todo>,
+    },
+    /// A message the user sent while the agent worked, now part of the conversation.
+    Steered {
+        message: Box<Message>,
     },
     /// Something the user should know that isn't an error (a pause, a cut-off reply).
     Notice {
@@ -402,6 +414,11 @@ impl RunManager {
     }
 
     /// The run in progress for a session, if any.
+    /// A run in progress.
+    pub fn get(&self, run_id: &str) -> Option<Arc<Run>> {
+        lock(&self.runs).get(run_id).cloned()
+    }
+
     pub fn for_session(&self, session_id: &str) -> Option<RunInfo> {
         lock(&self.runs)
             .values()

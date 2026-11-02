@@ -1,4 +1,4 @@
-import { CornerDownLeft, ShieldQuestionMark } from 'lucide-react';
+import { CornerDownLeft, ShieldQuestionMark, TriangleAlert } from 'lucide-react';
 import { useState } from 'react';
 import type { PermissionRequest } from '../../lib/types';
 import { useChat } from '../../stores/chat';
@@ -41,6 +41,26 @@ export function PermissionCard({ request }: { request: PermissionRequest }) {
         </div>
       </div>
       {request.diff && <DiffView diff={request.diff} className="mt-3" />}
+      {request.command && (
+        <pre
+          aria-label="Command"
+          className="mt-3 max-h-[180px] overflow-auto whitespace-pre-wrap break-words rounded-[10px] bg-surface-2 px-3 py-2 font-mono text-[12.5px] leading-[1.55] text-text select-text"
+        >
+          <span className="text-text-3 select-none">$ </span>
+          {request.command}
+        </pre>
+      )}
+      {request.danger && (
+        <p
+          role="alert"
+          className="mt-2.5 flex items-start gap-2 rounded-control bg-danger-soft px-3 py-2 text-[12.5px] text-danger"
+        >
+          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+          <span>
+            Careful: this command {request.danger}. Hearth always asks before commands like this.
+          </span>
+        </p>
+      )}
       <div className="mt-3.5 flex flex-wrap items-center gap-2">
         {request.choices.map((choice) => (
           <Button

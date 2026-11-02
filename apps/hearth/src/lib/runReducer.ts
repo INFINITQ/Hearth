@@ -20,7 +20,14 @@ export type LiveRun = {
   /** Waiting for the user. */
   permission: PermissionRequest | null;
   question: Question | null;
+  /** Output of running commands so far, by call id (the newest part). */
+  output: Record<string, string>;
+  /** Messages the user sent while it worked, waiting to join the conversation. */
+  queued: string[];
 };
+
+/** Live command output kept per call. */
+const LIVE_OUTPUT_CHARS = 20_000;
 
 export type RunError = { message: string; retryable: boolean };
 export type RunNotice = { level: 'info' | 'warning'; text: string };
@@ -45,6 +52,8 @@ export function newRun(sessionId: string, runId: string | null = null): LiveRun 
     writing: null,
     permission: null,
     question: null,
+    output: {},
+    queued: [],
   };
 }
 
@@ -187,12 +196,33 @@ export function applyRunEvent(state: TranscriptState, event: RunEnvelope): Trans
         ...state,
         run: { ...live, tool: { callId: event.callId, title: event.title }, writing: null },
       };
+    case 'tool_output': {
+      const text = `${live.output[event.callId] ?? ''}${event.text}\n`;
+      return {
+        ...state,
+        run: {
+          ...live,
+          output: { ...live.output, [event.callId]: text.slice(-LIVE_OUTPUT_CHARS) },
+        },
+      };
+    }
     case 'tool_finished':
       return {
         ...state,
         messages: placeAfterParent(state.messages, event.message),
         run: { ...live, tool: live.tool?.callId === event.callId ? null : live.tool },
       };
+    case 'steered': {
+      const index = live.queued.indexOf(event.message.content);
+      return {
+        ...state,
+        messages: placeAfterParent(state.messages, event.message),
+        run: {
+          ...live,
+          queued: index < 0 ? live.queued : live.queued.filter((_, i) => i !== index),
+        },
+      };
+    }
     case 'permission_request': {
       const permission: PermissionRequest = {
         requestId: event.requestId,
@@ -202,6 +232,8 @@ export function applyRunEvent(state: TranscriptState, event: RunEnvelope): Trans
         title: event.title,
         path: event.path,
         diff: event.diff,
+        command: event.command,
+        danger: event.danger,
         choices: event.choices,
       };
       return { ...state, run: { ...live, status: 'waiting', permission } };

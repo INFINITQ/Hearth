@@ -8,6 +8,7 @@ pub mod agent;
 pub mod chat;
 pub mod fsutil;
 pub mod llm;
+pub mod proc;
 pub mod runs;
 pub mod settings;
 pub mod store;

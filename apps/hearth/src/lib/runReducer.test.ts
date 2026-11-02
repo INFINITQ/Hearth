@@ -184,6 +184,8 @@ describe('applyRunEvent in coding sessions', () => {
         title: 'Edit a.py',
         path: 'a.py',
         diff: '-a\n+b',
+        command: null,
+        danger: null,
         choices: [{ id: 'allow_once', label: 'Allow' }],
       }),
     ]);
@@ -209,6 +211,26 @@ describe('applyRunEvent in coding sessions', () => {
     ]);
     expect(state.run?.question?.options).toEqual(['Yes', 'No']);
     expect(state.notice?.text).toBe('Paused after 50 steps.');
+  });
+});
+
+describe('commands and messages sent mid-task', () => {
+  it('collects live output per call and places steered messages', () => {
+    let state = start([
+      message('u1', 'user', 'Run tests', null),
+      message('a1', 'assistant', '', 'u1'),
+    ]);
+    state = play(state, [
+      event({ type: 'tool_output', callId: 'c1', text: 'running 3 tests' }),
+      event({ type: 'tool_output', callId: 'c1', text: 'ok' }),
+    ]);
+    expect(state.run?.output.c1).toBe('running 3 tests\nok\n');
+
+    state = { ...state, run: { ...state.run!, queued: ['Also lint', 'And format'] } };
+    const steer = { ...message('u2', 'user', 'Also lint', 'a1'), turn: 1 };
+    state = applyRunEvent(state, event({ type: 'steered', message: steer }));
+    expect(state.messages.map((m) => m.id)).toEqual(['u1', 'a1', 'u2']);
+    expect(state.run?.queued).toEqual(['And format']);
   });
 });
 

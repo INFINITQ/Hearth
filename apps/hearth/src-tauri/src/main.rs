@@ -80,6 +80,11 @@ fn main() {
             code_commands::code_session_create,
             code_commands::run_permission,
             code_commands::run_answer,
+            code_commands::run_steer,
+            code_commands::session_changes,
+            code_commands::session_revert,
+            code_commands::session_undo,
+            code_commands::shells_info,
         ])
         .setup(|app| {
             let data = data_dir(app.handle())?;

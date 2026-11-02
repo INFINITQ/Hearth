@@ -5,6 +5,7 @@
 //! sibling, and the session remembers which leaf is active. The conversation shown (and sent to
 //! the model) is the path from the root to that leaf.
 
+mod checkpoints;
 mod connections;
 mod messages;
 mod migrations;
@@ -18,6 +19,7 @@ use std::sync::{Mutex, MutexGuard};
 use rusqlite::Connection as Db;
 use serde_json::Value;
 
+pub use checkpoints::Checkpoint;
 pub use connections::{Connection, ConnectionInput};
 pub use messages::{Message, MessageFinish, MessageRole, MessageStatus, NewMessage};
 pub use projects::Project;

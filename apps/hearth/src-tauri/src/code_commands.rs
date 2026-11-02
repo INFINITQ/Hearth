@@ -4,6 +4,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use hearth_core::agent::changes::FileChange;
+use hearth_core::agent::shell::{Shell, ShellKind};
 use hearth_core::agent::{Agent, PermissionMode, PermissionReply};
 use hearth_core::store::{Project, Session, SessionSummary, Store};
 use serde::Serialize;
@@ -110,4 +112,56 @@ pub async fn run_answer(
     answer: String,
 ) -> Result<bool> {
     Ok(agent.answer(&question_id, &answer))
+}
+
+/// A message for a task in progress: it joins the conversation before the agent's next step.
+#[tauri::command]
+pub async fn run_steer(agent: State<'_, Agent>, run_id: String, text: String) -> Result<()> {
+    agent.steer(&run_id, &text).map_err(Error::Invalid)
+}
+
+/// The files the agent changed in a session, with diffs against how they were before.
+#[tauri::command]
+pub async fn session_changes(
+    agent: State<'_, Agent>,
+    session_id: String,
+) -> Result<Vec<FileChange>> {
+    agent.changes(&session_id).map_err(Error::Invalid)
+}
+
+/// Puts one file back as it was before the session changed it.
+#[tauri::command]
+pub async fn session_revert(
+    agent: State<'_, Agent>,
+    session_id: String,
+    path: String,
+) -> Result<()> {
+    agent.revert(&session_id, &path).map_err(Error::Invalid)
+}
+
+/// Undoes the file changes of a task and every task after it. Returns the files put back.
+#[tauri::command]
+pub async fn session_undo(
+    agent: State<'_, Agent>,
+    session_id: String,
+    turn: i64,
+) -> Result<Vec<String>> {
+    agent.undo(&session_id, turn).map_err(Error::Invalid)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellsInfo {
+    git_bash: Option<String>,
+    powershell: Option<String>,
+}
+
+/// Which shells this PC has, for Settings.
+#[tauri::command]
+pub async fn shells_info() -> Result<ShellsInfo> {
+    let path = |kind| Shell::find(kind).map(|shell| shell.path.display().to_string());
+    Ok(ShellsInfo {
+        git_bash: path(ShellKind::GitBash),
+        powershell: path(ShellKind::PowerShell),
+    })
 }

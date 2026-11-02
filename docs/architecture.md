@@ -63,6 +63,15 @@ without a tool call (or a guard stops it).
 - **Edits are safe to retry:** a file must have been read (and not changed since) before it can be
   changed; line endings, BOM and encoding are kept; edits that don't match exactly fall back to
   whitespace-tolerant matching and otherwise show the closest text.
+- **Commands** (`shell.rs`, `exec.rs`, `command.rs`) run in Git Bash or PowerShell, each in its
+  own Job Object (`proc.rs`), so Stop and timeouts end the whole process tree. Output streams to
+  the UI; the model gets the first and last 150 lines. Read-only commands and project "Always
+  allow" rules skip the prompt in Auto-edit; dangerous commands always ask.
+- **Undo** (`changes.rs`): before the agent first changes a file in a task, the file is saved as
+  a checkpoint. The Changes panel compares files with their first checkpoint; undoing a task
+  restores every file changed from that task on. Commands' own changes aren't tracked.
+- **Steering:** a message sent while the agent works waits in Rust and joins the conversation
+  before the next step.
 
 Projects (folders) are stored in `hearth.db`. Opening a folder for the first time asks whether
 its contents are trusted; untrusted projects don't get their AGENTS.md read.

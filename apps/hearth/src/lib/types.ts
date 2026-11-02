@@ -7,11 +7,15 @@ export type Mode = 'chat' | 'code';
 /** Which model to use: a model on a saved connection (managed llama-server presets join later). */
 export type ModelRef = { kind: 'connection'; connectionId: string; model: string };
 
+export type ShellKind = 'git_bash' | 'powershell';
+
 export type Settings = {
   theme: ThemeSetting;
   sidebarCollapsed: boolean;
   models: { chat: ModelRef | null; code: ModelRef | null };
   chat: { systemPrompt: string | null };
+  /** The shell the agent runs commands in. */
+  code: { shell: ShellKind };
 };
 
 /** What Rust hands the page before it loads (window.__HEARTH_BOOT__). */
@@ -38,6 +42,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sidebarCollapsed: false,
   models: { chat: null, code: null },
   chat: { systemPrompt: null },
+  code: { shell: 'git_bash' },
 };
 
 export type ChatParams = {
@@ -118,11 +123,20 @@ export type ToolDisplay = {
   answer?: string;
   /** The user's note with a denial. */
   note?: string;
+  /** Commands. */
+  command?: string;
+  output?: string;
+  exitCode?: number | null;
+  durationMs?: number;
+  processId?: number;
 };
 
 export type ToolStatus = 'ok' | 'error' | 'denied' | 'cancelled';
 
-export type PermissionChoice = { id: 'allow_once' | 'allow_session' | 'deny'; label: string };
+export type PermissionChoice = {
+  id: 'allow_once' | 'allow_session' | 'allow_always' | 'deny';
+  label: string;
+};
 
 export type PermissionRequest = {
   requestId: string;
@@ -132,8 +146,24 @@ export type PermissionRequest = {
   title: string;
   path: string | null;
   diff: string | null;
+  /** Commands: the command, and why it's dangerous if it is. */
+  command: string | null;
+  danger: string | null;
   choices: PermissionChoice[];
 };
+
+/** A file the agent changed in a session. */
+export type FileChange = {
+  path: string;
+  abs: string;
+  kind: 'added' | 'modified' | 'deleted';
+  diff: string;
+  added: number;
+  removed: number;
+  binary: boolean;
+};
+
+export type ShellsInfo = { gitBash: string | null; powershell: string | null };
 
 export type Question = { questionId: string; callId: string; question: string; options: string[] };
 
@@ -163,6 +193,8 @@ export type Message = {
   createdAt: number;
   /** This message among its siblings (edits and regenerations). */
   versions: { index: number; ids: string[] };
+  /** Coding sessions: the task this message belongs to (1, 2, …). */
+  turn?: number;
   /** Coding sessions: an assistant message's tool calls, and a tool message's answer. */
   toolCalls?: ToolCall[] | null;
   toolCallId?: string | null;
@@ -218,6 +250,8 @@ export type RunEvent =
       chars: number;
     }
   | { type: 'tool_started'; callId: string; tool: string; title: string }
+  | { type: 'tool_output'; callId: string; text: string }
+  | { type: 'steered'; message: Message }
   | { type: 'tool_finished'; callId: string; status: ToolStatus; summary: string; message: Message }
   | ({ type: 'permission_request' } & PermissionRequest)
   | { type: 'permission_resolved'; requestId: string; decision: PermissionChoice['id'] }

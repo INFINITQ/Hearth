@@ -12,14 +12,17 @@ import {
   ListTodo,
   LoaderCircle,
   MessageCircleQuestionMark,
+  OctagonX,
+  ScrollText,
   Search,
+  SquareTerminal,
   TriangleAlert,
   Wrench,
 } from 'lucide-react';
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useLayoutEffect, useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
 import { diffStats } from '../../lib/diff';
-import { callTitle, canonicalTool } from '../../lib/toolCalls';
+import { callTitle, canonicalTool, parseArgs } from '../../lib/toolCalls';
 import type { Message, ToolCall, ToolStatus } from '../../lib/types';
 import { DiffView } from './DiffView';
 import { TodoList } from './TodoPanel';
@@ -36,6 +39,9 @@ const ICONS: Record<string, typeof FileText> = {
   edit_file: FilePen,
   todo_write: ListTodo,
   ask_user: MessageCircleQuestionMark,
+  run_command: SquareTerminal,
+  command_output: ScrollText,
+  kill_process: OctagonX,
 };
 
 function StateIcon({ state, tool }: { state: CallState; tool: string }) {
@@ -83,31 +89,79 @@ function summaryOf(state: CallState, answer: Message | undefined): string {
   }
 }
 
-/** One tool call as a compact row; opens to show its diff or output. */
+/** A command and what it printed, following the end while it runs. */
+function CommandView({
+  command,
+  output,
+  running,
+}: {
+  command: string;
+  output: string | undefined;
+  running: boolean;
+}) {
+  const box = useRef<HTMLPreElement>(null);
+  useLayoutEffect(() => {
+    if (running && box.current) box.current.scrollTop = box.current.scrollHeight;
+  }, [output, running]);
+  return (
+    <pre
+      ref={box}
+      aria-label="Command output"
+      className="max-h-[260px] overflow-auto whitespace-pre-wrap break-words rounded-[10px] bg-surface-2 px-3 py-2 font-mono text-[12px] leading-[1.55] text-text-2 select-text"
+    >
+      <span className="text-text">
+        <span className="text-text-3 select-none">$ </span>
+        {command}
+      </span>
+      {output ? `\n${output.replace(/\n$/, '')}` : running ? '\n' : '\n(no output)'}
+      {running && (
+        <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-text-3 align-middle" />
+      )}
+    </pre>
+  );
+}
+
+/** One tool call as a compact row; opens to show its diff, command output or result. */
 export function ToolCard({
   call,
   answer,
   state,
   liveTitle,
+  liveOutput,
 }: {
   call: ToolCall;
   answer: Message | undefined;
   state: CallState;
   liveTitle?: string;
+  /** A running command's output so far. */
+  liveOutput?: string;
 }) {
   const display = answer?.toolDisplay ?? null;
   const tool = answer?.toolName ?? canonicalTool(call.function.name);
   const title = display?.title ?? liveTitle ?? callTitle(call);
   const diff = display?.diff;
-  // Successful changes show their diff until the user folds them away.
+  const command =
+    tool === 'run_command'
+      ? (display?.command ?? (parseArgs(call).command as string | undefined) ?? '')
+      : null;
+  // Changes show their diff, and commands their output while running or after failing, until
+  // the user folds them away.
   const [toggled, setToggled] = useState<boolean | null>(null);
-  const open = toggled ?? (!!diff && state === 'ok');
-  const setOpen = setToggled;
+  const open =
+    toggled ??
+    ((!!diff && state === 'ok') ||
+      (command !== null && (state === 'running' || state === 'error')));
   const stats = diff ? diffStats(diff) : null;
   const summary = summaryOf(state, answer);
   const output = answer?.content ?? '';
-  const showOutput = !!output && !(diff && state === 'ok') && !display?.todos;
-  const expandable = !!(diff || display?.todos?.length || display?.note || showOutput);
+  const showOutput = command === null && !!output && !(diff && state === 'ok') && !display?.todos;
+  const expandable = !!(
+    diff ||
+    display?.todos?.length ||
+    display?.note ||
+    showOutput ||
+    (command !== null && (answer || state === 'running'))
+  );
 
   return (
     <div data-tool={tool} data-status={state} className="tool-card">
@@ -115,7 +169,7 @@ export function ToolCard({
         type="button"
         aria-expanded={expandable ? open : undefined}
         disabled={!expandable}
-        onClick={() => setOpen(!open)}
+        onClick={() => setToggled(!open)}
         className="group flex h-8 w-full items-center gap-2.5 rounded-control px-2 text-left text-[13px] transition-colors duration-150 enabled:hover:bg-surface-2"
       >
         <StateIcon state={state} tool={tool} />
@@ -148,6 +202,13 @@ export function ToolCard({
       {open && expandable && (
         <div className="mb-2 ml-[34px] mt-1 space-y-2">
           {diff && <DiffView diff={diff} />}
+          {command !== null && (
+            <CommandView
+              command={command}
+              output={display?.output ?? liveOutput}
+              running={state === 'running'}
+            />
+          )}
           {display?.todos && <TodoList todos={display.todos} />}
           {display?.note && (
             <p className="text-[12.5px] text-text-2">

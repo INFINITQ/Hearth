@@ -1,9 +1,9 @@
-import { Monitor, Moon, Sun } from 'lucide-react';
+import { Monitor, Moon, SquareTerminal, Sun, Terminal } from 'lucide-react';
 import { type ReactNode, useEffect, useState } from 'react';
 import { ConnectionsSettings } from '../components/ConnectionsSettings';
 import { Segmented } from '../components/ui/Segmented';
 import { backend } from '../lib/backend';
-import type { SystemInfo, ThemeSetting } from '../lib/types';
+import type { ShellKind, ShellsInfo, SystemInfo, ThemeSetting } from '../lib/types';
 import { useApp } from '../stores/app';
 
 export function SettingsScreen() {
@@ -51,6 +51,10 @@ export function SettingsScreen() {
           <ConnectionsSettings />
         </Section>
 
+        <Section title="Coding">
+          <ShellSetting />
+        </Section>
+
         <Section title="About">
           <Row label="Hearth">{info?.appVersion ?? '…'}</Row>
           <Row label="WebView2">{info?.webviewVersion ?? '…'}</Row>
@@ -62,6 +66,49 @@ export function SettingsScreen() {
         </Section>
       </div>
     </div>
+  );
+}
+
+/** Which shell the agent runs commands in, and what this PC has. */
+function ShellSetting() {
+  const shell = useApp((s) => s.settings.code.shell);
+  const [found, setFound] = useState<ShellsInfo | null>(null);
+  useEffect(() => {
+    let live = true;
+    backend()
+      .shellsInfo()
+      .then((next) => live && setFound(next))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  const path = shell === 'git_bash' ? found?.gitBash : found?.powershell;
+  const hint = !found
+    ? 'Looking for shells…'
+    : path
+      ? path
+      : shell === 'git_bash'
+        ? 'Git Bash isn’t installed (it comes with Git for Windows), so PowerShell is used.'
+        : 'PowerShell wasn’t found, so Git Bash is used.';
+  return (
+    <Row label="Shell for commands" hint={hint}>
+      <Segmented<ShellKind>
+        label="Shell for commands"
+        className="w-[240px]"
+        value={shell}
+        onChange={(next) => {
+          useApp
+            .getState()
+            .updateSettings({ code: { shell: next } })
+            .catch((err: unknown) => console.error('could not save the shell', err));
+        }}
+        options={[
+          { value: 'git_bash', label: 'Git Bash', icon: <SquareTerminal /> },
+          { value: 'powershell', label: 'PowerShell', icon: <Terminal /> },
+        ]}
+      />
+    </Row>
   );
 }
 

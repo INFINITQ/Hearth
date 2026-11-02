@@ -11,6 +11,7 @@ import {
 import type {
   ChatAction,
   ChatParams,
+  FileChange,
   Message,
   Mode,
   ModelRef,
@@ -48,6 +49,9 @@ type ChatState = {
   project: Project | null;
   projects: Project[];
   pendingTrust: Project | null;
+  /** Code mode: the Changes panel and what it lists (null until loaded). */
+  changesOpen: boolean;
+  changes: FileChange[] | null;
 
   loadLists(): Promise<void>;
   loadProjects(): Promise<void>;
@@ -70,6 +74,11 @@ type ChatState = {
   setPermissionMode(mode: PermissionMode): Promise<void>;
   answerPermission(decision: PermissionChoice['id'], note?: string): Promise<void>;
   answerQuestion(answer: string): Promise<void>;
+  /** Undoes the file changes of task `turn` and every task after it. */
+  undo(turn: number): Promise<void>;
+  toggleChanges(open?: boolean): void;
+  loadChanges(): Promise<void>;
+  revertFile(change: FileChange): Promise<void>;
   search(query: string, mode: Mode): Promise<void>;
   setRunState(info: RunInfo): void;
   dismissError(): void;
@@ -98,6 +107,12 @@ function handle(event: RunEnvelope) {
   if (event.type === 'finished' && state.run && state.session) {
     void refresh(state.session.id);
     void state.loadLists();
+  }
+  if (
+    (event.type === 'finished' || event.type === 'tool_finished') &&
+    useChat.getState().changesOpen
+  ) {
+    void useChat.getState().loadChanges();
   }
 }
 
@@ -169,6 +184,8 @@ export const useChat = create<ChatState>()((set, get) => ({
   project: null,
   projects: [],
   pendingTrust: null,
+  changesOpen: false,
+  changes: null,
 
   loadLists: async () => {
     const project = get().project;
@@ -223,7 +240,15 @@ export const useChat = create<ChatState>()((set, get) => ({
 
   open: async (id) => {
     const view = await backend().sessionGet(id);
-    set({ session: view.session, messages: view.messages, run: null, error: null, notice: null });
+    set({
+      session: view.session,
+      messages: view.messages,
+      run: null,
+      error: null,
+      notice: null,
+      changes: null,
+    });
+    if (get().changesOpen) void get().loadChanges();
     const project = get().project;
     if (view.session.mode === 'code' && view.session.workspaceId !== project?.id) {
       const owner = get().projects.find((p) => p.id === view.session.workspaceId);
@@ -239,9 +264,33 @@ export const useChat = create<ChatState>()((set, get) => ({
   },
 
   newChat: () =>
-    set({ session: null, messages: [], run: null, error: null, notice: null, draft: NO_DRAFT }),
+    set({
+      session: null,
+      messages: [],
+      run: null,
+      error: null,
+      notice: null,
+      draft: NO_DRAFT,
+      changes: null,
+      changesOpen: false,
+    }),
 
   send: async (text, mode) => {
+    const live = get().run;
+    if (mode === 'code' && live?.runId && get().session?.id === live.sessionId) {
+      // The agent is working: the message joins before its next step.
+      const message = text.trim();
+      set({ run: { ...live, queued: [...live.queued, message] } });
+      try {
+        await backend().runSteer(live.runId, message);
+      } catch (err) {
+        const current = get().run;
+        if (current)
+          set({ run: { ...current, queued: current.queued.filter((q) => q !== message) } });
+        set({ error: { message: errorMessage(err), retryable: false } });
+      }
+      return;
+    }
     let session = get().session;
     if (!session || session.mode !== mode) {
       if (mode === 'code') {
@@ -348,6 +397,54 @@ export const useChat = create<ChatState>()((set, get) => ({
   answerQuestion: async (answer) => {
     const question = get().run?.question;
     if (question) await backend().runAnswer(question.questionId, answer);
+  },
+
+  undo: async (turn) => {
+    const session = get().session;
+    if (!session) return;
+    try {
+      const restored = await backend().sessionUndo(session.id, turn);
+      const text = restored.length
+        ? `Restored ${restored.length === 1 ? '1 file' : `${restored.length} files`} to how ${
+            restored.length === 1 ? 'it was' : 'they were'
+          } before that task: ${restored.join(', ')}.`
+        : 'Nothing to undo: no files were changed from that task on.';
+      set({ notice: { level: 'info', text } });
+      if (get().changesOpen) await get().loadChanges();
+    } catch (err) {
+      set({ error: { message: errorMessage(err), retryable: false } });
+    }
+  },
+
+  toggleChanges: (open) => {
+    const next = open ?? !get().changesOpen;
+    set({ changesOpen: next });
+    if (next) void get().loadChanges();
+  },
+
+  loadChanges: async () => {
+    const session = get().session;
+    if (session?.mode !== 'code') {
+      set({ changes: [] });
+      return;
+    }
+    try {
+      const changes = await backend().sessionChanges(session.id);
+      if (get().session?.id === session.id) set({ changes });
+    } catch (err) {
+      set({ changes: [], error: { message: errorMessage(err), retryable: false } });
+    }
+  },
+
+  revertFile: async (change) => {
+    const session = get().session;
+    if (!session) return;
+    try {
+      await backend().sessionRevert(session.id, change.abs);
+    } catch (err) {
+      set({ error: { message: errorMessage(err), retryable: false } });
+    }
+    await get().loadChanges();
   },
 
   search: async (query, mode) => {

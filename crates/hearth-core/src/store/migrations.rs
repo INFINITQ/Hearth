@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 use super::{Result, StoreError};
 
-const MIGRATIONS: &[&str] = &[INITIAL, PROJECTS];
+const MIGRATIONS: &[&str] = &[INITIAL, PROJECTS, CHECKPOINTS];
 
 const INITIAL: &str = r#"
 CREATE TABLE kv (
@@ -97,6 +97,30 @@ CREATE TABLE workspaces (
 );
 ALTER TABLE sessions ADD COLUMN env_snapshot TEXT;
 CREATE INDEX sessions_by_workspace ON sessions (workspace_id, archived, pinned, updated_at DESC);
+"#;
+
+/// M4: each file as it was before the agent first changed it in a task (for undo and the
+/// Changes panel), and "Always allow" rules for commands.
+const CHECKPOINTS: &str = r#"
+CREATE TABLE checkpoints (
+  id INTEGER PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions (id) ON DELETE CASCADE,
+  turn INTEGER NOT NULL,
+  path TEXT NOT NULL COLLATE NOCASE,
+  existed INTEGER NOT NULL,
+  content BLOB,
+  created_at INTEGER NOT NULL,
+  UNIQUE (session_id, turn, path)
+);
+
+CREATE TABLE permission_rules (
+  id INTEGER PRIMARY KEY,
+  workspace_id TEXT NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,
+  class TEXT NOT NULL,
+  pattern TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE (workspace_id, class, pattern)
+);
 "#;
 
 pub fn apply(conn: &mut Connection) -> Result<()> {

@@ -13,6 +13,8 @@ type ComposerProps = {
   tools?: ReactNode;
   /** Shift+Tab in the box (coding sessions: the next permission mode). */
   onShiftTab?(): void;
+  /** Messages can be sent while running (coding sessions: they join the task). */
+  sendWhileRunning?: boolean;
   autoFocus?: boolean;
   className?: string;
 };
@@ -27,12 +29,13 @@ export function Composer({
   onStop,
   tools,
   onShiftTab,
+  sendWhileRunning = false,
   autoFocus,
   className,
 }: ComposerProps) {
   const [text, setText] = useState('');
   const box = useRef<HTMLTextAreaElement>(null);
-  const canSend = !running && text.trim().length > 0;
+  const canSend = (!running || sendWhileRunning) && text.trim().length > 0;
 
   useLayoutEffect(() => {
     const el = box.current;
@@ -84,15 +87,28 @@ export function Composer({
         {tools}
         <div className="flex-1" />
         {running ? (
-          <button
-            type="button"
-            aria-label="Stop"
-            title="Stop (Esc)"
-            onClick={onStop}
-            className="grid size-8 place-items-center rounded-full bg-text text-bg transition-opacity duration-150 hover:opacity-85"
-          >
-            <Square className="size-3 fill-current" />
-          </button>
+          <>
+            {canSend && (
+              <button
+                type="button"
+                aria-label="Send"
+                title="Send now: it joins the task before the next step"
+                onClick={send}
+                className="grid size-8 place-items-center rounded-full bg-accent text-on-accent transition-colors duration-150 hover:bg-accent-hover"
+              >
+                <ArrowUp className="size-[17px] stroke-[2.25]" />
+              </button>
+            )}
+            <button
+              type="button"
+              aria-label="Stop"
+              title="Stop (Esc)"
+              onClick={onStop}
+              className="grid size-8 place-items-center rounded-full bg-text text-bg transition-opacity duration-150 hover:opacity-85"
+            >
+              <Square className="size-3 fill-current" />
+            </button>
+          </>
         ) : (
           <button
             type="button"

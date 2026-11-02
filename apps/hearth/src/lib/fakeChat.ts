@@ -362,6 +362,31 @@ export function fakeChat(): ChatBackend {
       resolve?.(answer);
       return !!resolve;
     },
+    runSteer: async () => {},
+    sessionChanges: async (sessionId) => {
+      const edited = [...messages.values()].some(
+        (m) => m.sessionId === sessionId && m.toolName === 'edit_file' && m.toolStatus === 'ok',
+      );
+      return edited
+        ? [
+            {
+              path: 'src/calc.py',
+              abs: 'C:\\Users\\you\\code\\demo-app\\src\\calc.py',
+              kind: 'modified',
+              diff: CALC_DIFF,
+              added: 1,
+              removed: 1,
+              binary: false,
+            },
+          ]
+        : [];
+    },
+    sessionRevert: async () => {},
+    sessionUndo: async () => ['src/calc.py'],
+    shellsInfo: async () => ({
+      gitBash: 'C:\\Program Files\\Git\\bin\\bash.exe',
+      powershell: 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+    }),
   };
 
   /** A scripted agent task: read a file, plan, then edit it (asking first in Ask mode). */
@@ -499,6 +524,8 @@ export function fakeChat(): ChatBackend {
           title: 'Edit src/calc.py',
           path: 'src/calc.py',
           diff: CALC_DIFF,
+          command: null,
+          danger: null,
           choices: [
             { id: 'allow_once', label: 'Allow' },
             { id: 'allow_session', label: 'Allow edits this session' },

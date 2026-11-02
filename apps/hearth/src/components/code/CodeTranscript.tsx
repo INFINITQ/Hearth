@@ -1,4 +1,5 @@
-import { ArrowDown, Info, LoaderCircle, TriangleAlert, X } from 'lucide-react';
+import { ArrowDown, Info, LoaderCircle, TriangleAlert, Undo2, X } from 'lucide-react';
+import { AlertDialog } from 'radix-ui';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { LiveRun, RunNotice } from '../../lib/runReducer';
 import { answersByStep } from '../../lib/toolCalls';
@@ -8,7 +9,7 @@ import { Markdown } from '../Markdown';
 import { CopyButton, stats } from '../MessageView';
 import { ThinkingBlock } from '../ThinkingBlock';
 import { RunErrorBanner } from '../Transcript';
-import { IconButton } from '../ui/Button';
+import { Button, IconButton } from '../ui/Button';
 import { type CallState, ToolCard } from './ToolCard';
 import { PermissionCard } from './PermissionCard';
 import { QuestionCard } from './QuestionCard';
@@ -46,6 +47,18 @@ export function CodeTranscript() {
   };
 
   const lastAssistant = messages.findLast((m) => m.role === 'assistant')?.id;
+  // A task starts at the first user message of its turn (later ones were sent mid-task).
+  const taskStarts = useMemo(() => {
+    const seen = new Set<number>();
+    const starts = new Set<string>();
+    for (const m of messages) {
+      if (m.role === 'user' && m.turn != null && !seen.has(m.turn)) {
+        seen.add(m.turn);
+        starts.add(m.id);
+      }
+    }
+    return starts;
+  }, [messages]);
 
   return (
     <div className="relative min-h-0 flex-1">
@@ -59,7 +72,11 @@ export function CodeTranscript() {
         <div className="mx-auto max-w-[800px] space-y-5 px-6 pb-8 pt-8">
           {messages.map((message) =>
             message.role === 'user' ? (
-              <UserTask key={message.id} message={message} />
+              <UserTask
+                key={message.id}
+                message={message}
+                undoable={taskStarts.has(message.id) && run === null}
+              />
             ) : message.role === 'assistant' ? (
               <AgentStep
                 key={message.id}
@@ -96,7 +113,8 @@ export function CodeTranscript() {
   );
 }
 
-function UserTask({ message }: { message: Message }) {
+function UserTask({ message, undoable }: { message: Message; undoable: boolean }) {
+  const [confirming, setConfirming] = useState(false);
   return (
     <div className="group flex flex-col items-end pt-1" data-role="user">
       <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-[18px] bg-surface-2 px-4 py-2.5 text-[15px] leading-[1.6] select-text">
@@ -104,7 +122,40 @@ function UserTask({ message }: { message: Message }) {
       </div>
       <div className="mt-1 flex items-center opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100">
         <CopyButton text={message.content} />
+        {undoable && (
+          <IconButton label="Undo file changes from here" onClick={() => setConfirming(true)}>
+            <Undo2 />
+          </IconButton>
+        )}
       </div>
+      <AlertDialog.Root open={confirming} onOpenChange={setConfirming}>
+        <AlertDialog.Portal>
+          <AlertDialog.Overlay className="dialog-overlay" />
+          <AlertDialog.Content className="dialog w-[420px]">
+            <AlertDialog.Title className="text-[15px] font-semibold">
+              Undo the file changes from this task on?
+            </AlertDialog.Title>
+            <AlertDialog.Description className="mt-1.5 text-[13.5px] leading-relaxed text-text-2">
+              Files the agent changed in this task and the ones after it go back to how they were
+              before it. The conversation stays as it is, and changes made by commands aren't
+              undone.
+            </AlertDialog.Description>
+            <div className="mt-5 flex justify-end gap-2">
+              <AlertDialog.Cancel asChild>
+                <Button variant="ghost">Cancel</Button>
+              </AlertDialog.Cancel>
+              <AlertDialog.Action asChild>
+                <Button
+                  variant="primary"
+                  onClick={() => void useChat.getState().undo(message.turn ?? 1)}
+                >
+                  Undo changes
+                </Button>
+              </AlertDialog.Action>
+            </div>
+          </AlertDialog.Content>
+        </AlertDialog.Portal>
+      </AlertDialog.Root>
     </div>
   );
 }
@@ -159,6 +210,7 @@ function AgentStep({
                 answer={answer}
                 state={stateOf(call, answer, run)}
                 liveTitle={run?.tool?.callId === call.id ? run.tool.title : undefined}
+                liveOutput={run?.output[call.id]}
               />
             );
           })}

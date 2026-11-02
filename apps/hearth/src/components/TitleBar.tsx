@@ -1,4 +1,4 @@
-import { PanelLeft, SquarePen } from 'lucide-react';
+import { FileDiff, PanelLeft, SquarePen } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { type WindowControls, backend } from '../lib/backend';
 import { useApp } from '../stores/app';
@@ -46,9 +46,30 @@ export function TitleBar() {
       >
         {title}
       </div>
+      {screen === 'code' && session?.mode === 'code' && <ChangesToggle />}
       {inConversation && <ModelPicker />}
       <CaptionButtons controls={backend().window} />
     </header>
+  );
+}
+
+/** Opens the panel with the files the agent changed in this session. */
+function ChangesToggle() {
+  const open = useChat((s) => s.changesOpen);
+  const count = useChat((s) => s.changes?.length ?? 0);
+  return (
+    <button
+      type="button"
+      aria-pressed={open}
+      aria-label="Changes"
+      title="Files the agent changed"
+      onClick={() => useChat.getState().toggleChanges()}
+      className="mr-1 flex h-7 items-center gap-1.5 rounded-full px-3 text-[12.5px] font-medium text-text-2 transition-colors duration-150 hover:bg-surface-3/70 hover:text-text aria-pressed:bg-surface-3 aria-pressed:text-text"
+    >
+      <FileDiff className="size-3.5" />
+      Changes
+      {open && count > 0 && <span className="tabular-nums text-text-3">{count}</span>}
+    </button>
   );
 }
 

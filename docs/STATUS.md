@@ -39,12 +39,36 @@ Where the build stands (plan: README "Status"; engineering details: build-notes.
     - Playwright E2E: 20, of which 5 are coding sessions (reload while a prompt waits, deny with
       a note, questions, screenshots).
 
-## Next: M4, commands, checkpoints, diff panel, stop and steer
+- **M4**: commands, checkpoints, the Changes panel, stop and steering.
+  - **Backend:**
+    - `proc.rs`: every child process in its own Job Object, started suspended and resumed after
+      joining, with no console window; killing the job ends the whole tree (tested with a
+      grandchild).
+    - `agent/shell.rs`: Git Bash (registry, PATH, usual folders) or PowerShell; scripts via a temp
+      `.sh` file or `-EncodedCommand`; output decoded (UTF-8 or the OEM code page), ANSI codes
+      and progress redraws removed, first and last 150 lines for the model.
+    - `agent/command.rs`: read-only commands (Plan runs them; Auto-edit doesn't ask), dangerous
+      ones (always ask, even in Full auto), rule prefixes (`npm test`).
+    - `agent/exec.rs`: foreground runs with live output, timeout and Stop; leftover background
+      processes stopped; background commands with `command_output` and `kill_process`.
+    - `agent/changes.rs`: checkpoints before each file's first change in a task; the session's
+      changes with diffs; revert a file; undo from a task on.
+    - Runner: run_command / command_output / kill_process, "Always allow `prefix` here" rules
+      (migration 3: `checkpoints`, `permission_rules`), steering (messages sent mid-task join
+      before the next step), a note to the model after an undo.
+    - Settings: `code.shell` (Git Bash or PowerShell).
+  - **UI:** command rows with live output, command permission cards (with a warning for
+    dangerous ones), the Changes panel (diffs, revert), "Undo file changes from here" on each
+    task, sending while the agent works (queued until the next step), the shell in Settings.
+  - **Tests (all green):**
+    - Rust: 93 core unit, 15 agent integration, 8 chat, 11 client, 4 app.
+    - Vitest: 20.
+    - Playwright E2E: 26.
 
-- `hearth_core::proc`: Job Objects, CREATE_NO_WINDOW, Git Bash / PowerShell resolution.
-- Tools:
-  - `run_command`: timeout, background mode, head and tail of the output, safe-list analysis;
-  - `command_output` and `kill_process`.
-- Checkpoints (file snapshots per turn), "Undo turn", a Changes panel with per-file revert.
-- Steering: a message typed mid-run goes in before the next model call.
-- Persistent "always allow" rules for command prefixes (the `permission_rules` table).
+## Next: M5, the managed llama-server runtime and the Models page
+
+- Find llama-server (PATH, a chosen path), check it (`--version`, `--list-devices`).
+- Read GGUF headers; scan model folders (and LM Studio's); pair mmproj files.
+- Presets per model; start, health-check, swap and stop llama-server in a Job Object; logs and
+  plain-language errors; the fake llama-server in the testkit.
+- The Models page: found models, roles, per-model settings, load and unload, status.

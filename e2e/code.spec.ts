@@ -238,3 +238,141 @@ test('screenshots of a coding session in light and dark, for visual review', asy
     await page.screenshot({ path: join(dir, `m3-code-${theme}.png`) });
   }
 });
+
+test.describe('commands, changes, undo and steering', () => {
+  const runCommand = (command: string) => ({
+    reply: { tool_calls: [{ name: 'run_command', arguments: { command } }] },
+  });
+
+  test('a command runs and its output shows in the transcript', async () => {
+    await mock.setScript({
+      steps: [
+        runCommand('echo e2e-from-bash && echo second-line'),
+        {
+          expect: [{ last_tool_result_contains: 'e2e-from-bash' }],
+          reply: { content: 'It printed two lines.' },
+        },
+      ],
+    });
+    const { page } = app;
+    await openProject(page);
+    await setMode(page, 'Full auto');
+    await send(page, 'Run the echo.');
+    await expect(page.getByText('It printed two lines.')).toBeVisible();
+    const row = tool(page, 'run_command');
+    await expect(row).toHaveAttribute('data-status', 'ok');
+    await row.locator('button[aria-expanded]').click();
+    await expect(row.getByLabel('Command output')).toContainText('second-line');
+  });
+
+  test('commands ask first in Ask mode, and Always allow is remembered', async () => {
+    await mock.setScript({
+      steps: [runCommand('echo one'), runCommand('echo two'), { reply: { content: 'Both done.' } }],
+    });
+    const { page } = app;
+    await openProject(page);
+    await setMode(page, 'Ask');
+    await send(page, 'Echo twice.');
+    const prompt = page.getByRole('region', { name: 'Permission request' });
+    await expect(prompt).toContainText('Allow this command?');
+    await expect(prompt.getByLabel('Command')).toContainText('echo one');
+    await prompt.getByRole('button', { name: 'Always allow `echo` here' }).click();
+    await expect(page.getByText('Both done.')).toBeVisible();
+    await expect(page.locator('[data-tool="run_command"][data-status="ok"]')).toHaveCount(2);
+  });
+
+  test('the Changes panel lists what changed and can revert a file', async () => {
+    await mock.setScript({ steps: [READ, FIX, { reply: { content: 'Fixed.' } }] });
+    const { page } = app;
+    await openProject(page);
+    await send(page, 'Fix add().');
+    await expect(page.getByText('Fixed.', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Changes', exact: true }).click();
+    const panel = page.getByRole('complementary', { name: 'Changes' });
+    await expect(panel.locator('[data-change="modified"]')).toContainText('calc.py');
+    await panel.getByRole('button', { name: 'Revert src/calc.py' }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Revert' }).click();
+    await expect(panel).toContainText("The agent hasn't changed any files yet.");
+    expect(calc()).toBe(CALC);
+  });
+
+  test('undoing a task puts its files back', async () => {
+    await mock.setScript({ steps: [READ, FIX, { reply: { content: 'Fixed.' } }] });
+    const { page } = app;
+    await openProject(page);
+    await send(page, 'Fix add() now');
+    await expect(page.getByText('Fixed.', { exact: true })).toBeVisible();
+    expect(calc()).toBe('def add(a, b):\n    return a + b\n');
+    const task = page.locator('[data-role="user"]').first();
+    await task.hover();
+    await task.getByRole('button', { name: 'Undo file changes from here' }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Undo changes' }).click();
+    await expect(page.getByRole('status')).toContainText('Restored 1 file');
+    expect(calc()).toBe(CALC);
+  });
+
+  test('a message sent while the agent works joins the next step', async () => {
+    await mock.setScript({
+      steps: [
+        {
+          reply: {
+            tool_calls: [{ name: 'glob', arguments: { pattern: '*.py' } }],
+            stream: { hold: 'first' },
+          },
+        },
+        {
+          expect: [{ last_user_contains: 'Also check the README' }],
+          reply: { content: 'Checked both.' },
+        },
+      ],
+    });
+    const { page } = app;
+    await openProject(page);
+    await send(page, 'Find the Python files.');
+    await expect(page.getByRole('button', { name: 'Stop' })).toBeVisible();
+    await send(page, 'Also check the README');
+    await expect(page.getByRole('list', { name: 'Waiting to be sent' })).toContainText(
+      'Also check the README',
+    );
+    await mock.release('first');
+    await expect(page.getByText('Checked both.')).toBeVisible();
+    await expect(page.locator('[data-role="user"]')).toHaveCount(2);
+    await expect(page.getByRole('list', { name: 'Waiting to be sent' })).toBeHidden();
+  });
+
+  test('screenshots of commands and the Changes panel, for visual review', async () => {
+    await mock.setScript({
+      steps: [
+        READ,
+        FIX,
+        runCommand('echo "test_add PASSED" && echo "1 passed in 0.02s"'),
+        {
+          reply: {
+            content: 'Fixed `add` and the test passes now.',
+            usage: { prompt_tokens: 2600, completion_tokens: 21, total_tokens: 2621 },
+            timings: { predicted_per_second: 44.2 },
+          },
+        },
+      ],
+    });
+    const { page } = app;
+    const dir = join('test-results', 'screens');
+    mkdirSync(dir, { recursive: true });
+    await openProject(page);
+    await setMode(page, 'Full auto');
+    await send(page, 'Fix add() and run the tests.');
+    await expect(page.getByText(/the test passes now/)).toBeVisible();
+    await tool(page, 'run_command').locator('button[aria-expanded]').click();
+    await page.getByRole('button', { name: 'Changes', exact: true }).click();
+    await page
+      .getByRole('complementary', { name: 'Changes' })
+      .locator('[data-change] button[aria-expanded]')
+      .first()
+      .click();
+    for (const theme of ['light', 'dark'] as const) {
+      await page.evaluate((t) => document.documentElement.setAttribute('data-theme', t), theme);
+      await page.waitForTimeout(200);
+      await page.screenshot({ path: join(dir, `m4-code-${theme}.png`) });
+    }
+  });
+});

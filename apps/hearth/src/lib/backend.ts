@@ -8,6 +8,7 @@ import {
   type Connection,
   type ConnectionInput,
   DEFAULT_SETTINGS,
+  type FileChange,
   type Mode,
   type PermissionChoice,
   type PermissionMode,
@@ -20,6 +21,7 @@ import {
   type SessionSummary,
   type SessionView,
   type Settings,
+  type ShellsInfo,
   type StartedRun,
   type SystemInfo,
 } from './types';
@@ -83,6 +85,13 @@ export interface ChatBackend {
     note?: string | null,
   ): Promise<boolean>;
   runAnswer(questionId: string, answer: string): Promise<boolean>;
+  /** A message for a task in progress (joins before the agent's next step). */
+  runSteer(runId: string, text: string): Promise<void>;
+  sessionChanges(sessionId: string): Promise<FileChange[]>;
+  sessionRevert(sessionId: string, path: string): Promise<void>;
+  /** Undoes the file changes of task `turn` and later ones; returns the files put back. */
+  sessionUndo(sessionId: string, turn: number): Promise<string[]>;
+  shellsInfo(): Promise<ShellsInfo>;
 }
 
 /**
@@ -180,6 +189,11 @@ export function tauriBackend(): Backend {
     runPermission: (requestId, decision, note) =>
       invoke('run_permission', { requestId, reply: { decision, note: note ?? null } }),
     runAnswer: (questionId, answer) => invoke('run_answer', { questionId, answer }),
+    runSteer: (runId, text) => invoke('run_steer', { runId, text }),
+    sessionChanges: (sessionId) => invoke('session_changes', { sessionId }),
+    sessionRevert: (sessionId, path) => invoke('session_revert', { sessionId, path }),
+    sessionUndo: (sessionId, turn) => invoke('session_undo', { sessionId, turn }),
+    shellsInfo: () => invoke('shells_info'),
 
     window: {
       minimize: () => void win.minimize(),

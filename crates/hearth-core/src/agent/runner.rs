@@ -5,20 +5,29 @@
 //! the user when needed), executed, and answered with a tool message. The model gets the results
 //! and carries on. Every tool call gets an answer, even when the user stops the run, so the
 //! conversation is always valid to send again.
+//!
+//! Files are saved as checkpoints before their first change in a task, so a task can be undone.
+//! Messages the user sends while the agent works ("steering") join the conversation before the
+//! next step.
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
+use super::changes::{self, FileChange};
+use super::exec::{self, Processes};
 use super::paths::Workspace;
 use super::permissions::{self, Grants, PermissionMode, Verdict};
 use super::prompt;
-use super::tools::{self, Action, Stamps, Todo, TodoStatus, ToolCx};
+use super::shell::{self, Shell, ShellKind};
+use super::tools::{self, Action, Prepared, Stamps, Todo, TodoStatus, ToolCx};
 use crate::chat::{self, ChatError, ChatParams, ModelResolver, ResolvedModel, StartedRun};
 use crate::llm::{
     ChatMessage, ChatRequest, FinishReason, LlmError, Role, ToolCall, ToolDef, toolparse,
@@ -37,6 +46,14 @@ const REPEAT_WARN: usize = 3;
 const REPEAT_STOP: usize = 5;
 /// How often the to-do list is repeated to the model (in steps).
 const TODO_REMINDER_EVERY: usize = 10;
+/// Command output kept for the UI (the model gets the first and last 150 lines).
+const UI_OUTPUT_CHARS: usize = 50_000;
+
+const UNDO_NOTE: &str = "\n\n(Note: the user undid file changes from an earlier task, so files may not match what \
+you saw before. Read them again before editing.)";
+
+const PYTHON_STUB: &str =
+    "Python was not found; run without arguments to install from the Microsoft Store";
 
 /// The user's answer to a permission prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -44,6 +61,8 @@ const TODO_REMINDER_EVERY: usize = 10;
 pub enum Decision {
     AllowOnce,
     AllowSession,
+    /// Commands: remember the command's prefix as allowed in this project.
+    AllowAlways,
     Deny,
 }
 
@@ -52,6 +71,7 @@ impl Decision {
         match self {
             Decision::AllowOnce => "allow_once",
             Decision::AllowSession => "allow_session",
+            Decision::AllowAlways => "allow_always",
             Decision::Deny => "deny",
         }
     }
@@ -67,11 +87,14 @@ pub struct PermissionReply {
 }
 
 /// What the agent remembers about a session while Hearth runs: which files the model has read
-/// (and how they looked), and what the user allowed for the session.
+/// (and how they looked), what the user allowed for the session, its background commands, and
+/// whether the user just undid some changes.
 #[derive(Default)]
 struct Memory {
     stamps: Stamps,
     grants: Mutex<Grants>,
+    processes: Processes,
+    undone: AtomicBool,
 }
 
 enum Waiter {
@@ -86,6 +109,9 @@ struct Inner {
     settings: Arc<SettingsStore>,
     memory: Mutex<HashMap<String, Arc<Memory>>>,
     waits: Mutex<HashMap<String, Waiter>>,
+    /// Messages sent while a run works, by run id.
+    steers: Mutex<HashMap<String, Vec<String>>>,
+    shells: Mutex<HashMap<ShellKind, Option<Shell>>>,
 }
 
 #[derive(Clone)]
@@ -162,8 +188,7 @@ impl Repeats {
     }
 }
 
-/// A 9-character id for tool calls Hearth found in text (some chat templates insist on that
-/// length).
+/// A 9-character id for a tool call (some chat templates insist on that length).
 fn call_id() -> String {
     new_id().replace('-', "").chars().rev().take(9).collect()
 }
@@ -233,14 +258,22 @@ fn pair_tool_results(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
     out
 }
 
+/// What gets added to a request without being saved.
+#[derive(Default)]
+struct Extras {
+    /// On the newest user message.
+    note: String,
+    /// On the newest tool result.
+    reminder: Option<String>,
+}
+
 fn build_request(
     system: &str,
     history: &[Message],
     model: &ResolvedModel,
     tools: &[ToolDef],
-    mode: PermissionMode,
     params: &ChatParams,
-    reminder: Option<String>,
+    extras: Extras,
 ) -> ChatRequest {
     let mut messages = vec![ChatMessage::system(system)];
     let last_user = history.iter().rposition(|m| m.role == MessageRole::User);
@@ -248,8 +281,8 @@ fn build_request(
         match message.role {
             MessageRole::User => {
                 let mut text = message.content.clone();
-                if Some(index) == last_user && mode == PermissionMode::Plan {
-                    text.push_str(prompt::PLAN_REMINDER);
+                if Some(index) == last_user {
+                    text.push_str(&extras.note);
                 }
                 messages.push(ChatMessage::user(text));
             }
@@ -283,7 +316,7 @@ fn build_request(
         }
     }
     let mut messages = pair_tool_results(messages);
-    if let (Some(reminder), Some(last)) = (reminder, messages.last_mut())
+    if let (Some(reminder), Some(last)) = (extras.reminder, messages.last_mut())
         && last.role == Role::Tool
         && let Some(crate::llm::Content::Text(text)) = &mut last.content
     {
@@ -323,6 +356,13 @@ fn todo_reminder(step: usize, todos: &[Todo]) -> Option<String> {
     ))
 }
 
+fn first_chars(text: &str, max: usize) -> String {
+    match text.char_indices().nth(max) {
+        Some((cut, _)) => format!("{}\n… (cut here)", &text[..cut]),
+        None => text.to_owned(),
+    }
+}
+
 impl Agent {
     pub fn new(
         store: Arc<Store>,
@@ -337,6 +377,8 @@ impl Agent {
             settings,
             memory: Mutex::new(HashMap::new()),
             waits: Mutex::new(HashMap::new()),
+            steers: Mutex::new(HashMap::new()),
+            shells: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -354,17 +396,7 @@ impl Agent {
                 "This conversation isn't a coding session.".into(),
             ));
         }
-        let project_id = session
-            .workspace_id
-            .clone()
-            .ok_or_else(|| ChatError::Invalid("This session has no project folder.".into()))?;
-        let project = inner.store.project(&project_id)?;
-        let workspace = Workspace::new(Path::new(&project.path)).map_err(|_| {
-            ChatError::Invalid(format!(
-                "The project folder {} can't be opened. Was it moved or deleted?",
-                project.path
-            ))
-        })?;
+        let (project, workspace) = self.workspace(&session).map_err(ChatError::Invalid)?;
         let model_ref =
             chat::model_for(&inner.settings.get(), &session).ok_or(ChatError::NoModel)?;
         let model = inner
@@ -409,14 +441,52 @@ impl Agent {
                 run: &run,
                 session: &session,
                 workspace: Arc::new(workspace),
+                project_id: project.id.clone(),
                 trusted: project.trusted,
+                turn,
                 model: &model,
             };
             let end = this.work(&job, user).await;
+            let unsent = lock(&this.0.steers).remove(&run.id).unwrap_or_default();
+            if !unsent.is_empty() {
+                run.emit(RunEvent::Notice {
+                    level: "warning".into(),
+                    text: format!(
+                        "The task ended before this was sent, so send it again: {}",
+                        unsent.join(" / ")
+                    ),
+                });
+            }
             run.emit(RunEvent::Finished { status: end });
             this.0.runs.finish(&run.id);
         });
         Ok(started)
+    }
+
+    /// Adds a message to a task in progress; it joins the conversation before the next step.
+    pub fn steer(&self, run_id: &str, text: &str) -> Result<(), String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("Type a message first.".into());
+        }
+        let run = self
+            .0
+            .runs
+            .get(run_id)
+            .ok_or("The task already finished. Send your message as a new task.")?;
+        let session = self
+            .0
+            .store
+            .session(&run.session_id)
+            .map_err(|e| e.to_string())?;
+        if session.mode != Mode::Code {
+            return Err("Only coding sessions take messages while they work.".into());
+        }
+        lock(&self.0.steers)
+            .entry(run_id.to_owned())
+            .or_default()
+            .push(text.to_owned());
+        Ok(())
     }
 
     /// Answers a permission prompt. False if nothing is waiting for it (any more).
@@ -445,9 +515,75 @@ impl Agent {
         }
     }
 
-    /// Forgets what the agent remembered about a session (it was deleted).
+    /// The files the agent changed in a session, compared with how they were before.
+    pub fn changes(&self, session_id: &str) -> Result<Vec<FileChange>, String> {
+        let session = self
+            .0
+            .store
+            .session(session_id)
+            .map_err(|e| e.to_string())?;
+        let (_, workspace) = self.workspace(&session)?;
+        changes::changes(&self.0.store, session_id, &workspace)
+    }
+
+    /// Puts one file back as it was before the session changed it.
+    pub fn revert(&self, session_id: &str, abs: &str) -> Result<(), String> {
+        changes::revert(&self.0.store, session_id, abs)?;
+        self.memory(session_id).undone.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Restores every file changed in task `turn` or later. Returns the files put back.
+    pub fn undo(&self, session_id: &str, turn: i64) -> Result<Vec<String>, String> {
+        if self.0.runs.for_session(session_id).is_some() {
+            return Err("Stop the task first.".into());
+        }
+        let session = self
+            .0
+            .store
+            .session(session_id)
+            .map_err(|e| e.to_string())?;
+        let (_, workspace) = self.workspace(&session)?;
+        let restored = changes::undo_from(&self.0.store, session_id, turn, &workspace)?;
+        if !restored.is_empty() {
+            self.memory(session_id).undone.store(true, Ordering::SeqCst);
+        }
+        Ok(restored)
+    }
+
+    /// Forgets a session (it was deleted) and stops its background commands.
     pub fn forget(&self, session_id: &str) {
-        lock(&self.0.memory).remove(session_id);
+        if let Some(memory) = lock(&self.0.memory).remove(session_id) {
+            memory.processes.kill_all();
+        }
+    }
+
+    /// The shell commands run in: the one chosen in Settings, else the other one.
+    pub fn shell(&self) -> Option<Shell> {
+        let preferred = self.0.settings.get().code.shell;
+        lock(&self.0.shells)
+            .entry(preferred)
+            .or_insert_with(|| Shell::choose(preferred))
+            .clone()
+    }
+
+    fn workspace(&self, session: &Session) -> Result<(crate::store::Project, Workspace), String> {
+        let project_id = session
+            .workspace_id
+            .clone()
+            .ok_or("This session has no project folder.")?;
+        let project = self
+            .0
+            .store
+            .project(&project_id)
+            .map_err(|e| e.to_string())?;
+        let workspace = Workspace::new(Path::new(&project.path)).map_err(|_| {
+            format!(
+                "The project folder {} can't be opened. Was it moved or deleted?",
+                project.path
+            )
+        })?;
+        Ok((project, workspace))
     }
 
     fn memory(&self, session_id: &str) -> Arc<Memory> {
@@ -470,7 +606,7 @@ impl Agent {
         if let Some(snapshot) = &session.env_snapshot {
             return snapshot.clone();
         }
-        let snapshot = prompt::snapshot(workspace, &chat::today(), trusted);
+        let snapshot = prompt::snapshot(workspace, &chat::today(), trusted, self.shell().as_ref());
         if let Err(err) = self.0.store.set_env_snapshot(&session.id, &snapshot) {
             tracing::warn!("could not save the session's environment: {err}");
         }
@@ -484,6 +620,38 @@ impl Agent {
         };
         lock(&self.0.waits).remove(id);
         answer
+    }
+
+    /// Adds messages the user sent while the run worked to the conversation.
+    fn take_steers(
+        &self,
+        job: &Job<'_>,
+        history: &mut Vec<Message>,
+        step: usize,
+    ) -> Result<(), String> {
+        let texts = lock(&self.0.steers).remove(&job.run.id).unwrap_or_default();
+        for text in texts {
+            let parent = history.last().map(|m| m.id.clone());
+            let mut new = NewMessage::user(&job.session.id, parent.as_deref(), &text);
+            new.turn = job.turn;
+            new.step = step as i64;
+            let saved = self
+                .0
+                .store
+                .insert_message(new)
+                .map_err(|e| e.to_string())?;
+            job.run.emit(RunEvent::Steered {
+                message: Box::new(saved.clone()),
+            });
+            history.push(saved);
+        }
+        Ok(())
+    }
+
+    fn has_steers(&self, run_id: &str) -> bool {
+        lock(&self.0.steers)
+            .get(run_id)
+            .is_some_and(|texts| !texts.is_empty())
     }
 
     async fn work(&self, job: &Job<'_>, user: Message) -> RunEnd {
@@ -500,6 +668,7 @@ impl Agent {
         let defs = tools::tool_defs(&tools::specs());
         let params = ChatParams::of(job.session);
         let memory = self.memory(&job.session.id);
+        let undone = memory.undone.swap(false, Ordering::SeqCst);
         let mut history = match store.path_to(&user.id) {
             Ok(history) => history,
             Err(err) => return chat::fail(run, "store", &err.to_string()),
@@ -511,19 +680,24 @@ impl Agent {
             if run.cancel.is_cancelled() {
                 return RunEnd::Cancelled;
             }
+            if let Err(err) = self.take_steers(job, &mut history, step) {
+                return chat::fail(run, "store", &err);
+            }
             let leaf = history.last().map_or(user.id.clone(), |m| m.id.clone());
-            let mode = self.mode(&job.session.id);
-            let request = build_request(
-                &system,
-                &history,
-                job.model,
-                &defs,
-                mode,
-                &params,
-                todo_reminder(step, &todos),
-            );
+            let mut note = String::new();
+            if undone {
+                note.push_str(UNDO_NOTE);
+            }
+            if self.mode(&job.session.id) == PermissionMode::Plan {
+                note.push_str(prompt::PLAN_REMINDER);
+            }
+            let extras = Extras {
+                note,
+                reminder: todo_reminder(step, &todos),
+            };
+            let request = build_request(&system, &history, job.model, &defs, &params, extras);
             let mut new = NewMessage::assistant(&job.session.id, Some(&leaf), &job.model.label);
-            new.turn = user.turn;
+            new.turn = job.turn;
             new.step = step as i64;
             let message = match store.insert_message(new) {
                 Ok(message) => message,
@@ -601,6 +775,10 @@ impl Agent {
                 None => {}
             }
             if calls.is_empty() {
+                // The user said something while the model was finishing: carry on with it.
+                if self.has_steers(&run.id) {
+                    continue;
+                }
                 if streamed.finish == Some(FinishReason::Length) {
                     run.emit(RunEvent::Notice {
                         level: "warning".into(),
@@ -620,8 +798,7 @@ impl Agent {
                 } else {
                     self.call_tool(job, &memory, call, &mut repeats).await
                 };
-                let saved = match self.save_answer(job, &history, user.turn, step, call, &answered)
-                {
+                let saved = match self.save_answer(job, &history, step, call, &answered) {
                     Ok(saved) => saved,
                     Err(err) => return chat::fail(run, "store", &err),
                 };
@@ -639,7 +816,7 @@ impl Agent {
                 if let Some(end) = answered.stop {
                     for rest in &calls[index + 1..] {
                         let skipped = Answered::skipped(rest);
-                        match self.save_answer(job, &history, user.turn, step, rest, &skipped) {
+                        match self.save_answer(job, &history, step, rest, &skipped) {
                             Ok(saved) => {
                                 run.emit(RunEvent::ToolFinished {
                                     call_id: rest.id.clone(),
@@ -667,7 +844,6 @@ impl Agent {
         &self,
         job: &Job<'_>,
         history: &[Message],
-        turn: i64,
         step: usize,
         call: &ToolCall,
         answered: &Answered,
@@ -676,7 +852,7 @@ impl Agent {
         let name =
             tools::canonical_name(&call.function.name).unwrap_or(call.function.name.as_str());
         let mut new = NewMessage::tool(&job.session.id, parent, &call.id, name, &answered.text);
-        new.turn = turn;
+        new.turn = job.turn;
         new.step = step as i64;
         new.tool_status = Some(answered.status.into());
         let mut display = answered.display.clone();
@@ -798,13 +974,139 @@ impl Agent {
             return Answered::new("ok", text, format!("Answered: {answer}"), display);
         }
 
-        let verdict =
-            permissions::decide(self.mode(&job.session.id), &prepared, &lock(&memory.grants));
-        match verdict {
-            Verdict::Allow => {}
-            Verdict::Deny(reason) => {
-                return Answered::new("denied", reason, "Not allowed in Plan mode", display);
+        if let Some(denied) = self
+            .permit(job, memory, call, &prepared, &mut display)
+            .await
+        {
+            return denied;
+        }
+
+        let todos = match &prepared.action {
+            Action::Todo(items) => Some(items.clone()),
+            _ => None,
+        };
+        let outcome = match prepared.action {
+            Action::Run {
+                command,
+                cwd,
+                timeout_s,
+                background,
+            } => {
+                return self
+                    .run_command(
+                        job, memory, call, &command, &cwd, timeout_s, background, display,
+                    )
+                    .await;
             }
+            Action::Output {
+                process_id,
+                wait_s,
+                tail_lines,
+            } => match memory.processes.get(process_id) {
+                Some(process) => {
+                    let report = process
+                        .report(Duration::from_secs(wait_s), tail_lines)
+                        .await;
+                    let summary = if process.running() {
+                        "running"
+                    } else {
+                        "finished"
+                    };
+                    tools::Outcome {
+                        ok: true,
+                        text: report,
+                        summary: summary.into(),
+                    }
+                }
+                None => tools::Outcome {
+                    ok: false,
+                    text: format!("There's no background process {process_id} in this session."),
+                    summary: "No such process".into(),
+                },
+            },
+            Action::Kill { process_id } => match memory.processes.get(process_id) {
+                Some(process) => {
+                    process.kill();
+                    tools::Outcome {
+                        ok: true,
+                        text: format!("Stopped process {process_id}."),
+                        summary: "stopped".into(),
+                    }
+                }
+                None => tools::Outcome {
+                    ok: false,
+                    text: format!("There's no background process {process_id} in this session."),
+                    summary: "No such process".into(),
+                },
+            },
+            action => {
+                let prepared = Prepared { action, ..prepared };
+                if let Action::Write { abs, .. } | Action::Edit { abs, .. } = &prepared.action {
+                    // How the file was before its first change in this task, for undo.
+                    let before = std::fs::read(abs).ok();
+                    let key = abs.display().to_string();
+                    let saved = self.0.store.save_checkpoint(
+                        &job.session.id,
+                        job.turn,
+                        &key,
+                        before.is_some(),
+                        before.as_deref().unwrap_or_default(),
+                    );
+                    if let Err(err) = saved {
+                        tracing::warn!("could not save a checkpoint of {key}: {err}");
+                    }
+                }
+                let (workspace, memory) = (job.workspace.clone(), memory.clone());
+                tokio::task::spawn_blocking(move || {
+                    tools::execute(
+                        prepared,
+                        &ToolCx {
+                            workspace: &workspace,
+                            stamps: &memory.stamps,
+                        },
+                    )
+                })
+                .await
+                .unwrap_or_else(|err| tools::Outcome {
+                    ok: false,
+                    text: format!("The tool failed unexpectedly: {err}"),
+                    summary: "Failed".into(),
+                })
+            }
+        };
+        self.finish_outcome(run, &name, &args, outcome, display, todos, repeats)
+    }
+
+    /// Checks the call against the mode, the session's grants and the project's rules, asking
+    /// the user when needed. `None` means go ahead; otherwise the answer to give the model.
+    async fn permit(
+        &self,
+        job: &Job<'_>,
+        memory: &Arc<Memory>,
+        call: &ToolCall,
+        prepared: &Prepared,
+        display: &mut Value,
+    ) -> Option<Answered> {
+        let run = job.run;
+        let rules = self
+            .0
+            .store
+            .rules(&job.project_id, "execute")
+            .unwrap_or_default();
+        let verdict = permissions::decide(
+            self.mode(&job.session.id),
+            prepared,
+            &lock(&memory.grants),
+            &rules,
+        );
+        match verdict {
+            Verdict::Allow => None,
+            Verdict::Deny(reason) => Some(Answered::new(
+                "denied",
+                reason,
+                "Not allowed in Plan mode",
+                display.clone(),
+            )),
             Verdict::Ask => {
                 let request_id = new_id();
                 let (tx, rx) = oneshot::channel();
@@ -817,18 +1119,26 @@ impl Agent {
                     title: prepared.title.clone(),
                     path: prepared.path.clone(),
                     diff: prepared.diff.clone(),
-                    choices: permissions::choices(&prepared),
+                    command: match &prepared.action {
+                        Action::Run { command, .. } => Some(command.clone()),
+                        _ => None,
+                    },
+                    danger: prepared
+                        .command
+                        .as_ref()
+                        .and_then(|c| c.danger.map(str::to_owned)),
+                    choices: permissions::choices(prepared),
                 });
                 let Some(reply) = self.wait(run, &request_id, rx).await else {
-                    return Answered {
+                    return Some(Answered {
                         stop: Some(RunEnd::Cancelled),
                         ..Answered::new(
                             "cancelled",
                             "The user stopped the run instead of answering.",
                             "Not run",
-                            display,
+                            display.clone(),
                         )
-                    };
+                    });
                 };
                 run.emit(RunEvent::PermissionResolved {
                     request_id,
@@ -854,39 +1164,175 @@ impl Agent {
                         if let Some(note) = &note {
                             display["note"] = json!(note);
                         }
-                        return Answered::new("denied", text, "Declined", display);
+                        Some(Answered::new("denied", text, "Declined", display.clone()))
                     }
-                    Decision::AllowSession => lock(&memory.grants).grant(&prepared),
-                    Decision::AllowOnce => {}
+                    Decision::AllowAlways => {
+                        if let Some(check) =
+                            prepared.command.as_ref().filter(|c| !c.prefix.is_empty())
+                        {
+                            if let Err(err) =
+                                self.0
+                                    .store
+                                    .add_rule(&job.project_id, "execute", &check.prefix)
+                            {
+                                tracing::warn!("could not save the rule: {err}");
+                            }
+                        } else {
+                            lock(&memory.grants).grant(prepared);
+                        }
+                        None
+                    }
+                    Decision::AllowSession => {
+                        lock(&memory.grants).grant(prepared);
+                        None
+                    }
+                    Decision::AllowOnce => None,
                 }
             }
         }
+    }
 
-        let todos = match &prepared.action {
-            Action::Todo(items) => Some(items.clone()),
-            _ => None,
+    #[allow(clippy::too_many_arguments)]
+    async fn run_command(
+        &self,
+        job: &Job<'_>,
+        memory: &Arc<Memory>,
+        call: &ToolCall,
+        command: &str,
+        cwd: &Path,
+        timeout_s: u64,
+        background: bool,
+        mut display: Value,
+    ) -> Answered {
+        let run = job.run;
+        display["command"] = json!(command);
+        let Some(shell) = self.shell() else {
+            return Answered::new(
+                "error",
+                "No shell was found on this PC, so commands can't run. The user can install Git for Windows \
+                 (for Git Bash) or choose PowerShell in Settings.",
+                "No shell",
+                display,
+            );
         };
-        let outcome = {
-            let (workspace, memory) = (job.workspace.clone(), memory.clone());
-            tokio::task::spawn_blocking(move || {
-                tools::execute(
-                    prepared,
-                    &ToolCx {
-                        workspace: &workspace,
-                        stamps: &memory.stamps,
-                    },
+        if background {
+            return match memory.processes.start(&shell, command, cwd) {
+                Ok(process) => {
+                    let id = process.id;
+                    display["processId"] = json!(id);
+                    Answered::new(
+                        "ok",
+                        format!(
+                            "Started process {id} in the background. Check its output with command_output \
+                             (process_id {id}) and stop it with kill_process."
+                        ),
+                        format!("process {id}, in the background"),
+                        display,
+                    )
+                }
+                Err(err) => Answered::new(
+                    "error",
+                    format!("Couldn't start the command: {err}"),
+                    "Couldn't start",
+                    display,
+                ),
+            };
+        }
+
+        let call_id = call.id.clone();
+        let ran = exec::run(
+            &shell,
+            command,
+            cwd,
+            Duration::from_secs(timeout_s),
+            &run.cancel,
+            |text| {
+                if !text.is_empty() {
+                    run.emit(RunEvent::ToolOutput {
+                        call_id: call_id.clone(),
+                        text,
+                    });
+                }
+            },
+        )
+        .await;
+        let ran = match ran {
+            Ok(ran) => ran,
+            Err(err) => {
+                return Answered::new(
+                    "error",
+                    format!("Couldn't start the command: {err}"),
+                    "Couldn't start",
+                    display,
+                );
+            }
+        };
+        display["output"] = json!(first_chars(&ran.output, UI_OUTPUT_CHARS));
+        display["exitCode"] = json!(ran.exit);
+        display["durationMs"] = json!(ran.elapsed.as_millis() as u64);
+        let shown = if ran.output.is_empty() {
+            "(no output)".to_owned()
+        } else {
+            shell::head_and_tail(&ran.output, 150, 150)
+        };
+        let seconds = format!("{:.1}s", ran.elapsed.as_secs_f64());
+        if ran.cancelled {
+            return Answered {
+                stop: Some(RunEnd::Cancelled),
+                ..Answered::new(
+                    "cancelled",
+                    format!("The user stopped the command.\n\nOutput so far:\n{shown}"),
+                    "stopped",
+                    display,
                 )
-            })
-            .await
-            .unwrap_or_else(|err| tools::Outcome {
-                ok: false,
-                text: format!("The tool failed unexpectedly: {err}"),
-                summary: "Failed".into(),
-            })
-        };
+            };
+        }
+        if ran.timed_out {
+            let text = format!(
+                "The command was stopped after {timeout_s}s because it hadn't finished. If it's a server or a \
+                 watcher, run it with background: true and check it with command_output.\n\nOutput so far:\n{shown}"
+            );
+            return Answered::new(
+                "error",
+                text,
+                format!("timed out after {timeout_s}s"),
+                display,
+            );
+        }
+        let code = ran
+            .exit
+            .map_or_else(|| "unknown".to_owned(), |code| code.to_string());
+        let mut text = format!("{shown}\n\n(exit code {code}, {seconds})");
+        if ran.stopped_leftovers {
+            text.push_str(
+                "\n(It left processes running that held its output open, so they were stopped. Run servers \
+                 with background: true.)",
+            );
+        }
+        if ran.output.contains(PYTHON_STUB) {
+            text.push_str(
+                "\n(That message comes from Windows' placeholder for python, not a real Python. Try `py` \
+                 instead, or tell the user Python isn't installed.)",
+            );
+        }
+        let status = if ran.exit == Some(0) { "ok" } else { "error" };
+        Answered::new(status, text, format!("exit {code} · {seconds}"), display)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_outcome(
+        &self,
+        run: &Run,
+        name: &str,
+        args: &Value,
+        outcome: tools::Outcome,
+        mut display: Value,
+        todos: Option<Vec<Todo>>,
+        repeats: &mut Repeats,
+    ) -> Answered {
         let mut text = outcome.text;
         let mut stop = None;
-        let count = repeats.record(&name, &args, &text);
+        let count = repeats.record(name, args, &text);
         if count >= REPEAT_STOP {
             stop = Some(RunEnd::Paused);
             run.emit(RunEvent::Notice {
@@ -922,7 +1368,10 @@ struct Job<'a> {
     run: &'a Run,
     session: &'a Session,
     workspace: Arc<Workspace>,
+    project_id: String,
     trusted: bool,
+    /// The task's number in the session (checkpoints and messages are filed under it).
+    turn: i64,
     model: &'a ResolvedModel,
 }
 
@@ -1003,5 +1452,11 @@ mod tests {
             status: TodoStatus::Completed,
         }];
         assert!(todo_reminder(11, &done).is_none());
+    }
+
+    #[test]
+    fn long_command_output_is_cut_for_the_ui() {
+        assert_eq!(first_chars("abc", 5), "abc");
+        assert_eq!(first_chars("abcdef", 3), "abc\n… (cut here)");
     }
 }

@@ -53,6 +53,13 @@ pub struct ChatSettings {
     pub system_prompt: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CodeSettings {
+    /// The shell the agent runs commands in (the other one is used if this one is missing).
+    pub shell: crate::agent::shell::ShellKind,
+}
+
 /// Everything the user can change. New fields need `#[serde(default)]` semantics (the struct
 /// is `default`), so settings files from older versions keep loading.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -62,6 +69,7 @@ pub struct Settings {
     pub sidebar_collapsed: bool,
     pub models: ModelRoles,
     pub chat: ChatSettings,
+    pub code: CodeSettings,
 }
 
 #[derive(Debug, thiserror::Error)]

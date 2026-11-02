@@ -13,6 +13,7 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use super::command::{self, CommandCheck};
 use super::matcher::{self, MatchError};
 use super::paths::Workspace;
 use super::text::{TextError, TextFile, sibling_line_endings};
@@ -160,6 +161,43 @@ pub fn specs() -> Vec<ToolSpec> {
                 &["path", "content"],
             ),
         },
+        ToolSpec {
+            name: "run_command",
+            class: Class::Execute,
+            description: "Run a shell command in the project folder (the shell is named in the environment). Use it to build, run tests and use git. Long output is cut to its first and last lines. For servers and watchers set background to true, then check them with command_output.",
+            parameters: object(
+                json!({
+                    "command": { "type": "string" },
+                    "description": { "type": "string", "description": "What the command does, in a few words." },
+                    "cwd": { "type": "string" },
+                    "timeout_s": { "type": "integer", "minimum": 1, "maximum": 600 },
+                    "background": { "type": "boolean" }
+                }),
+                &["command"],
+            ),
+        },
+        ToolSpec {
+            name: "command_output",
+            class: Class::Read,
+            description: "Show what a background command has printed so far and whether it's still running. Set wait_s to wait for it to finish first.",
+            parameters: object(
+                json!({
+                    "process_id": { "type": "integer" },
+                    "wait_s": { "type": "integer", "minimum": 0, "maximum": 30 },
+                    "tail_lines": { "type": "integer", "minimum": 1 }
+                }),
+                &["process_id"],
+            ),
+        },
+        ToolSpec {
+            name: "kill_process",
+            class: Class::Internal,
+            description: "Stop a background command started with run_command.",
+            parameters: object(
+                json!({ "process_id": { "type": "integer" } }),
+                &["process_id"],
+            ),
+        },
     ];
     specs.sort_by_key(|spec| spec.name);
     specs
@@ -186,6 +224,10 @@ pub fn canonical_name(name: &str) -> Option<&'static str> {
         | "str_replace_editor" => "edit_file",
         "todo_write" | "todowrite" | "update_todos" | "todo" => "todo_write",
         "ask_user" | "ask" | "ask_followup_question" | "question" => "ask_user",
+        "run_command" | "bash" | "shell" | "run_shell_command" | "execute_command" | "terminal"
+        | "powershell" | "exec" => "run_command",
+        "command_output" | "bash_output" | "read_output" | "get_output" => "command_output",
+        "kill_process" | "kill_shell" | "kill_bash" | "stop_process" => "kill_process",
         _ => return None,
     })
 }
@@ -218,6 +260,13 @@ pub fn normalize_args(args: Value) -> Value {
         ("query", "pattern"),
         ("regex", "pattern"),
         ("text", "content"),
+        ("run_in_background", "background"),
+        ("timeout", "timeout_s"),
+        ("working_directory", "cwd"),
+        ("workdir", "cwd"),
+        ("shell_id", "process_id"),
+        ("bash_id", "process_id"),
+        ("pid", "process_id"),
     ];
     for (from, to) in renames {
         if !map.contains_key(to)
@@ -367,6 +416,21 @@ pub enum Action {
         question: String,
         options: Vec<String>,
     },
+    /// Commands run in the agent loop (they're async and stream their output).
+    Run {
+        command: String,
+        cwd: PathBuf,
+        timeout_s: u64,
+        background: bool,
+    },
+    Output {
+        process_id: u32,
+        wait_s: u64,
+        tail_lines: usize,
+    },
+    Kill {
+        process_id: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -387,6 +451,8 @@ pub struct Prepared {
     pub inside: bool,
     /// A unified diff for file changes.
     pub diff: Option<String>,
+    /// For commands: whether they're read-only or dangerous, and their rule prefix.
+    pub command: Option<CommandCheck>,
     pub action: Action,
 }
 
@@ -468,6 +534,7 @@ pub fn prepare(name: &str, args: Value, cx: &ToolCx) -> Result<Prepared, String>
         path: resolved.map(|r| r.display.clone()),
         inside: resolved.is_none_or(|r| r.inside),
         diff,
+        command: None,
         action,
     };
 
@@ -717,6 +784,63 @@ pub fn prepare(name: &str, args: Value, cx: &ToolCx) -> Result<Prepared, String>
                 None,
                 Action::Ask { question, options },
             ))
+        }
+        "run_command" => {
+            let command = need_str(&args, "command", tool)?.trim().to_owned();
+            if command.is_empty() {
+                return Err("The command is empty.".into());
+            }
+            let cwd_arg = get_str(&args, "cwd").or_else(|| get_str(&args, "path"));
+            let cwd = cx.workspace.resolve(cwd_arg.unwrap_or("."))?;
+            if !cwd.abs.is_dir() {
+                return Err(format!(
+                    "{} isn't a folder, so the command can't run there.",
+                    cwd.display
+                ));
+            }
+            // Claude-style agents give `timeout` in milliseconds.
+            let timeout_s = match get_usize(&args, "timeout_s").unwrap_or(120) as u64 {
+                ms if ms > 600 => ms / 1000,
+                s => s,
+            }
+            .clamp(1, 600);
+            let first_line = command.lines().next().unwrap_or_default();
+            let mut shown: String = first_line.chars().take(80).collect();
+            if shown.len() < command.len() {
+                shown.push('…');
+            }
+            let check = command::check(&command);
+            let action = Action::Run {
+                command,
+                cwd: cwd.abs.clone(),
+                timeout_s,
+                background: get_bool(&args, "background"),
+            };
+            let mut run = prepared(format!("Run {shown}"), Some(&cwd), None, action);
+            run.command = Some(check);
+            Ok(run)
+        }
+        "command_output" | "kill_process" => {
+            let process_id = get_usize(&args, "process_id").ok_or_else(|| {
+                format!(
+                    "{tool} needs `process_id`: the number run_command gave the background command."
+                )
+            })? as u32;
+            Ok(if tool == "kill_process" {
+                prepared(
+                    format!("Stop process {process_id}"),
+                    None,
+                    None,
+                    Action::Kill { process_id },
+                )
+            } else {
+                let action = Action::Output {
+                    process_id,
+                    wait_s: get_usize(&args, "wait_s").unwrap_or(0).min(30) as u64,
+                    tail_lines: get_usize(&args, "tail_lines").unwrap_or(100).clamp(1, 1000),
+                };
+                prepared(format!("Check process {process_id}"), None, None, action)
+            })
         }
         _ => Err(format!("{tool} isn't available here.")),
     }
@@ -1093,6 +1217,9 @@ pub fn execute(prepared: Prepared, cx: &ToolCx) -> Outcome {
             )
         }
         Action::Ask { .. } => failed("ask_user is answered by the user, not executed.".into()),
+        Action::Run { .. } | Action::Output { .. } | Action::Kill { .. } => {
+            failed("Commands are run by the agent loop.".into())
+        }
     }
 }
 
