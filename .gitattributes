@@ -1,0 +1,18 @@
+# Normalise line endings in the repo; Windows tools still get CRLF where they need it.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Test fixtures keep their exact bytes (CRLF files, BOMs, binary GGUF headers).
+crates/**/fixtures/** -text
+
+# Binary files
+*.png binary
+*.ico binary
+*.icns binary
+*.pdf binary
+*.gguf binary
+*.wasm binary
+*.woff2 binary
+*.ttf binary

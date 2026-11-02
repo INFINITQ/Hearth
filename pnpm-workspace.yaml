@@ -1,0 +1,30 @@
+packages:
+  - apps/*
+
+# --- Supply-chain policy (same as Folio) ------------------------------------------------
+# Hearth runs code from npm inside a desktop app that can edit your files and run commands,
+# so dependencies must come from boring, trusted releases.
+
+# Write exact versions into package.json; pnpm-lock.yaml pins the rest.
+saveExact: true
+
+# Don't install anything published less than 3 days ago (in minutes). Hijacked or
+# malicious releases are usually spotted and pulled within that window.
+minimumReleaseAge: 4320
+
+# Fail the install if a package's publishing trust level drops compared to earlier releases.
+trustPolicy: no-downgrade
+# Reviewed exceptions. Each must be an exact version with a reason.
+trustPolicyExclude:
+  # Backport from npm's own team fixing CVE-2022-25883 (ReDoS) on the 6.x line. It was
+  # published after 7.x releases that carried provenance, so the date-based check flags it.
+  # (Same exception as Folio; pulled in by eslint-plugin-react-hooks via @babel/core.)
+  - 'semver@6.3.1'
+
+# Only direct dependencies may come from git or tarball URLs.
+blockExoticSubdeps: true
+
+# Dependency install scripts never run unless listed here as `true`. Any unreviewed
+# script makes the install fail (strictDepBuilds) instead of being silently skipped.
+strictDepBuilds: true
+allowBuilds: {}

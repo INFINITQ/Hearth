@@ -1,0 +1,7 @@
+# Child processes must be created through hearth_core::proc, which hides console windows
+# (CREATE_NO_WINDOW) and puts every process tree in a Windows Job Object, so Stop, timeouts
+# and quitting Hearth always end all of it (no orphaned llama-server holding VRAM).
+disallowed-methods = [
+  { path = "std::process::Command::new", reason = "use hearth_core::proc instead" },
+  { path = "tokio::process::Command::new", reason = "use hearth_core::proc instead", allow-invalid = true },
+]
